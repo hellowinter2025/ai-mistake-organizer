@@ -4,6 +4,7 @@ import { BoxSelector } from './selector.js';
 import { state, on, emit, currentBoxes, setBoxes, saveCart } from './state.js';
 import { openCropper } from './figure.js';
 import { openEditor } from './editor.js';
+import { fixLiteralEscapes } from './math.js';
 import { $, toast, show, hide, debounce } from './ui.js';
 
 let selector = null;
@@ -693,16 +694,19 @@ function dropItem(item) {
 
 function draftFromFields(fields) {
   if (!fields) return {};
+  // 队列是落 localStorage 的：早先解析的条目里 \n 可能是两个字符，
+  // 这里统一还原一次，textarea 和预览才不会一直显示「\n」。
+  const T = (v) => (typeof v === 'string' ? fixLiteralEscapes(v) : v);
   return {
-    stem: fields.question_text,
-    answer: fields.answer,
-    error_reason: fields.error_analysis,
-    solution_fix: fields.solution_fix,
-    solution_alt: fields.solution_alt,
+    stem: T(fields.question_text),
+    answer: T(fields.answer),
+    error_reason: T(fields.error_analysis),
+    solution_fix: T(fields.solution_fix),
+    solution_alt: T(fields.solution_alt),
     knowledge_points: fields.knowledge_points,
     question_type: fields.question_type,
     difficulty: fields.difficulty,
-    notes: fields.notes,
+    notes: T(fields.notes),
     figure_svg: fields.figure_svg,
     figure_tikz: fields.figure_tikz,
     figure_smiles: fields.figure_smiles,

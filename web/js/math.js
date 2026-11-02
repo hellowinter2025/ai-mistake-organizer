@@ -88,6 +88,28 @@ function appendText(parent, value) {
 
 const TALL_MATH = /\\begin\{(?:[pbBvV]?matrix|cases|aligned|alignedat|array|gathered|split)\}|\\[\w]*frac\{\\frac/;
 
+/**
+ * 把**字面量** ``\n`` / ``\r`` / ``\t`` 还原成真换行（服务端也会做，这里是兜底）。
+ *
+ * 为什么前端还要再做一遍：队列是落 localStorage 的，早先解析出来的条目带着
+ * 两个字面量的 `\n`，服务端改好也管不到浏览器里那份缓存，用户会一直看到
+ * 「…A 正确。\nB：…」。渲染前过一道即可，不用重新解析。
+ *
+ * 不能误伤 TeX：`\ne`（≠）、`\to`、`\nu`、`\theta`、`\notin`、`\node` 全是命令。
+ * 判据：反斜杠后面跟的是「非字母」或「大写字母」才当换行 —— `\nA. ` 是选项、
+ * `\n所以` 是中文，而 TeX 命令名不会是大写开头，也不会只有一个 n。
+ */
+export function fixLiteralEscapes(value) {
+  const text = String(value ?? '');
+  if (!text.includes('\\')) return text;
+  return text.replace(/\\([nrt])/g, (whole, ch, offset) => {
+    const next = text[offset + 2] || '';
+    if (/[a-zA-Z]/.test(next) && next === next.toLowerCase()) return whole;  // \ne \to \nu
+    return ch === 'n' ? '\n' : ch === 'r' ? '\r' : '\t';
+  });
+}
+
+
 /** 矩阵、分段函数、多行推导即使在行内书写也要独占一行 */
 export function isTallMath(latex) {
   return TALL_MATH.test(latex || '');
@@ -101,7 +123,8 @@ export function renderRich(container, text, options = {}) {
   const errors = [];
   container.textContent = '';
   const { display = 'block', inline = false } = options;
-  for (const seg of tokenize(text)) {
+  // 渲染前统一还原字面量 \n（旧数据 / 旧队列缓存里还带着两个字符的写法）
+  for (const seg of tokenize(fixLiteralEscapes(text))) {
     if (seg.type === 'text') {
       appendText(container, seg.value);
       continue;
