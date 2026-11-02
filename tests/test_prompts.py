@@ -268,17 +268,28 @@ def test_method_hint_absent_for_text_subjects():
             assert "触发点：" not in text, (subject, json_mode)
 
 
-def test_method_hint_stays_in_syllabus_without_naming_advanced_tools():
-    """只说"按教材来"，**不要**罗列洛必达/泰勒/中值定理。
+def test_method_hint_is_shape_only_not_a_technique_list():
+    """方法提示只规定**结构**（方法 → 触发点 → 过程），不列具体技巧。
 
-    点名禁用等于把这些词写进提示词，反而给模型提供了一条超纲思路的入口；
-    正面限定范围就够了。
+    两点都踩过：① 点名禁用洛必达/泰勒/中值定理，等于把这些词写进提示词，反而给
+    超纲思路开了口子；② 列一堆"可用技巧"（参变分离、点差法、隐零点…）同样在替模型
+    预设思路，容易把题往某个套路上带。提示词只留"按教材来 + 三段结构"这个约束。
     """
+    forbidden = (
+        # 点名禁用的超纲工具
+        "洛必达", "泰勒", "中值定理", "拉格朗日乘数",
+        # 具体技巧清单
+        "隐零点", "端点效应", "参变分离", "点差法", "设而不求", "错位相减",
+        "整体法", "微元法", "极化恒等式",
+    )
     for json_mode in (True, False):
-        text = prompts.system_prompt(json_mode, "数学")
-        assert "高中教材" in text
-        for banned in ("洛必达", "泰勒", "中值定理", "拉格朗日乘数"):
-            assert banned not in text, banned
+        for subject in ("数学", "物理"):
+            text = prompts.system_prompt(json_mode, subject)
+            assert "方法：<名称>" in text
+            assert "触发点：" in text
+            assert "高中教材" in text
+            for word in forbidden:
+                assert word not in text, f"{subject} 提示词里不该出现「{word}」"
 
 
 def test_solution_fix_description_mentions_method():
