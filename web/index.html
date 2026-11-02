@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 错题整理</title>
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<!-- TikZ 生成的 SVG 里 <text> 用 TeX 字体（cmr10 等），缺了会 fallback 到系统衬线体 -->
+<link rel="stylesheet" href="/vendor/tikz/fonts.css">
+<link rel="stylesheet" href="/css/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>∑</text></svg>">
+</head>
+<body>
+<datalist id="subjectList">
+  <option>数学</option><option>物理</option><option>化学</option><option>生物</option>
+  <option>语文</option><option>英语</option><option>历史</option><option>地理</option>
+  <option>政治</option><option>科学</option>
+</datalist>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">AI</div>
+    <div class="brand-text">
+      <h1>AI 错题整理</h1>
+      <p>拍照 · 框选 · AI 解析 · 组卷</p>
+    </div>
+  </div>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-view="recognize">识别整理</button>
+    <button class="tab" data-view="bank">题库 <span class="pill" id="bankCount">0</span></button>
+    <button class="tab" data-view="paper">组卷导出 <span class="pill hidden" id="cartCount">0</span></button>
+  </nav>
+
+  <div class="top-right">
+    <span class="ai-chip" id="aiStatus" title="当前 AI 配置">未配置</span>
+    <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
+    <button class="icon-btn" id="btnPower" title="关闭服务">⏻</button>
+  </div>
+</header>
+
+<main>
+  <!-- ============ 识别整理 ============ -->
+  <section class="view active" id="view-recognize">
+    <div class="rec-grid">
+      <aside class="panel side-left">
+        <div class="panel-head">
+          <h2>图片</h2>
+          <button class="mini-btn" id="btnClearImages" title="移除全部图片">清空</button>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <div class="dz-idle" id="dzIdle">
+            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M12 16V4m0 0L7 9m5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <strong>拖入试卷照片</strong>
+            <span>或点击选择 · 支持多张 · JPG/PNG/WEBP/HEIC</span>
+          </div>
+          <div class="dz-busy hidden" id="dzBusy">
+            <div class="spinner"></div>
+            <strong id="dzBusyText">上传中…</strong>
+            <span id="dzBusyPct">0%</span>
+          </div>
+          <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp,image/bmp,image/gif,image/heic,image/heif,image/avif" multiple hidden>
+        </div>
+        <div class="filmstrip" id="filmstrip"></div>
+        <div class="hint-card">
+          <h3>怎么用</h3>
+          <ol>
+            <li>上传整页试卷照片，也可直接 Ctrl+V 粘贴截图。</li>
+            <li><b>在图上拖拽框出每道题</b>：拖空白画新框，拖框移动，角点缩放，点框选中，Delete 删除。</li>
+            <li>点「AI 解析」逐题生成题目、错因与解析；解析中还能继续加框。</li>
+            <li>审核后存入题库，随时组卷导出 PDF / DOCX。</li>
+          </ol>
+        </div>
+      </aside>
+
+      <div class="stage-wrap">
+        <div class="stage-toolbar">
+          <div class="tool-group">
+            <button class="btn ghost" id="btnSelectAll" disabled>全选</button>
+            <button class="btn ghost" id="btnSelectNone" disabled>取消选择</button>
+            <button class="btn ghost" id="btnDeleteBox" disabled>删除选中框</button>
+          </div>
+          <div class="tool-group right">
+            <label class="zoom">缩放
+              <input type="range" id="zoomRange" min="60" max="260" value="100" step="10">
+              <span id="zoomLabel">100%</span>
+            </label>
+            <span class="stage-info" id="stageInfo">未载入图片</span>
+          </div>
+        </div>
+        <div class="stage" id="stage">
+          <div class="empty-stage" id="emptyStage">
+            <div class="empty-art">📄</div>
+            <p>还没有图片</p>
+            <button class="btn primary" id="btnPickFile">选择试卷照片</button>
+          </div>
+          <div class="canvas-scroll hidden" id="canvasScroll">
+            <div class="canvas-inner" id="canvasInner">
+              <img id="pageImage" alt="试卷照片" draggable="false">
+              <canvas id="overlay"></canvas>
+            </div>
+          </div>
+                  </div>
+      </div>
+
+      <aside class="panel side-right">
+        <div class="panel-head queue-head">
+          <h2>题目队列 <span class="pill" id="queueCount">0</span></h2>
+          <div class="head-actions">
+            <button class="mini-btn hidden" id="btnContinueQueue" title="继续解析队列里剩余的题">继续解析</button>
+            <button class="mini-btn hidden" id="btnRetryFailed" title="重新解析失败的题">重试失败</button>
+            <button class="mini-btn hidden" id="btnClearSaved" title="从队列移除已入库的题（题库里仍保留）">清理已入库</button>
+            <button class="mini-btn" id="btnClearQueue" title="清空整个队列（已入库的题目不受影响）">清空</button>
+          </div>
+        </div>
+        <div class="queue-actions">
+          <label class="subject-inline"><span>解析学科</span>
+            <select id="solveSubject" class="mini-select"></select>
+          </label>
+          <button class="btn primary block" id="btnSolve" disabled>AI 解析所选题目</button>
+          <p class="muted small" id="solveHint">先在左侧勾选题目</p>
+        </div>
+        <!-- 批量收尾：不用一条条点「入库」，全部处理完再统一组卷 -->
+        <div class="queue-batch hidden" id="queueBatch">
+          <button class="btn primary block" id="btnSaveAll">全部入库</button>
+          <button class="btn block" id="btnCartAll">全部加入组卷</button>
+        </div>
+        <div class="queue-progress hidden" id="queueProgress">
+          <div class="qp-bar"><i id="queueProgressBar"></i></div>
+          <span class="qp-text" id="queueProgressText"></span>
+        </div>
+        <div class="queue-list" id="queueList">
+          <div class="empty-note">勾选题目后出现在这里</div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============ 题库 ============ -->
+  <section class="view" id="view-bank">
+    <div class="bank-toolbar">
+      <div class="search-box">
+        <input type="search" id="bankSearch" placeholder="搜索题干、答案、错因、知识点…">
+      </div>
+      <select id="bankSubject" class="mini-select" title="按学科筛选">
+        <option value="">全部学科</option>
+      </select>
+      <label class="switch"><input type="checkbox" id="bankStarred"> 只看收藏</label>
+      <span class="muted" id="bankTotal">共 0 题</span>
+      <div class="spacer"></div>
+      <select id="bankDate" class="mini-select" title="按提交日期全选">
+        <option value="">按日期全选…</option>
+      </select>
+      <button class="btn ghost" id="btnSelectDate" disabled>全选该日期</button>
+      <button class="btn ghost" id="btnBankRefresh">刷新</button>
+    </div>
+    <div class="bank-grid" id="bankGrid"></div>
+    <!-- 框选/多选后浮出的批量操作条 -->
+    <div class="bank-selbar hidden" id="bankSelBar">
+      <span id="bankSelCount">已选 0 题</span>
+      <button class="btn primary" id="btnSelCart">加入组卷</button>
+      <button class="btn ghost" id="btnSelAll">全选当前结果</button>
+      <button class="btn ghost" id="btnSelClear">清空选择</button>
+    </div>
+    <div class="empty-state hidden" id="bankEmpty">
+      <div class="empty-art">📚</div>
+      <p>题库还是空的</p>
+      <span>去「识别整理」上传第一张试卷照片吧</span>
+    </div>
+  </section>
+
+  <!-- ============ 组卷 ============ -->
+  <section class="view" id="view-paper">
+    <div class="paper-grid">
+      <aside class="panel paper-form">
+        <div class="panel-head">
+          <h2>试卷设置</h2>
+          <div class="head-actions">
+            <button class="mini-btn" id="btnNewPaper" title="清空题目和表单，从一张空白卷开始">新建试卷</button>
+          </div>
+        </div>
+        <label class="field"><span>试卷标题</span><input id="paperTitle" placeholder="默认：10月29日错题"></label>
+        <label class="field"><span>副标题（可选）</span><input id="paperSubtitle" placeholder="如：函数与导数专题"></label>
+        <label class="field"><span>试卷来源（可选）</span><input id="paperSource" placeholder="如：XX中学高三第一次月考"></label>
+        <label class="field"><span>学科</span><input id="paperSubject" list="subjectList" placeholder="默认跟随设置"></label>
+        <div class="field">
+          <span>排版方式</span>
+          <div class="seg" id="paperLayout">
+            <button data-value="standard" class="active">标准试卷</button>
+            <button data-value="cutout">裁切粘贴</button>
+          </div>
+          <em class="field-hint" id="layoutHint">A4 整卷：题干 + 错因 + 解析 + 答案</em>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>姓名</span><input id="paperName" placeholder="留空则导出时为空"></label>
+          <label class="field"><span>日期</span><input id="paperDate" type="date"></label>
+        </div>
+        <div class="field answer-opt">
+          <span>答案位置</span>
+          <div class="seg" id="answerPosition">
+            <button data-value="inline" class="active">题后</button>
+            <button data-value="end">卷末</button>
+          </div>
+        </div>
+        <label class="switch answer-opt"><input type="checkbox" id="optShowAnswer" checked> 附答案与解析</label>
+        <label class="switch"><input type="checkbox" id="optShowError" checked> 包含错误原因</label>
+        <label class="switch answer-opt"><input type="checkbox" id="optShowAnalysis" checked> 包含解析过程</label>
+        <label class="switch"><input type="checkbox" id="optShowImage"> 保留原题截图</label>
+        <label class="switch answer-opt"><input type="checkbox" id="optShowKp"> 标注知识点</label>
+        <label class="field answer-opt"><span>每题留白（行）</span><input id="optAnswerSpace" type="number" min="0" max="6" value="0"></label>
+        <div class="panel-actions">
+          <button class="btn block" id="btnAutoLayout" title="把同一学科的题目排在一起（不改变题型和顺序之外的东西）">按学科归类</button>
+          <button class="btn primary block" id="btnExportPdf">导出 PDF</button>
+          <button class="btn block" id="btnExportDocx">导出 DOCX</button>
+          <button class="btn ghost block" id="btnPreviewPaper">预览排版</button>
+        </div>
+      </aside>
+
+      <div class="paper-main">
+        <div class="panel paper-items-panel">
+          <div class="panel-head">
+            <h2>已选题目 <span class="pill" id="paperItemCount">0</span></h2>
+            <div class="head-actions">
+              <button class="mini-btn" id="btnPaperClear" title="一次性清空已选题目">批量清空</button>
+            </div>
+          </div>
+          <div class="paper-items" id="paperItems">
+            <div class="empty-note">去题库点「加入试卷」挑题</div>
+          </div>
+        </div>
+        <div class="panel saved-papers">
+          <div class="panel-head">
+            <h2>试卷库 <span class="pill" id="savedCount">0</span></h2>
+            <div class="head-actions">
+              <button class="mini-btn" id="btnReloadPapers" title="重新读取">刷新</button>
+              <button class="mini-btn" id="btnClearPapers" title="删除试卷库里的全部记录（题目不受影响）">清空</button>
+            </div>
+          </div>
+          <div id="savedPapers" class="saved-list"><div class="empty-note">还没有保存过试卷</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ============ 题图裁剪弹层 ============ -->
+<div class="crop-mask hidden" id="cropMask">
+  <div class="crop-dialog">
+    <div class="crop-head">
+      <strong>框选图形区域</strong>
+      <span class="muted">在图上拖出一个矩形，只保留图形本身，题干文字不会被导出</span>
+    </div>
+    <div class="crop-stage" id="cropStage">
+      <img id="cropImage" alt="题目截图">
+      <div class="crop-rect hidden" id="cropRect"></div>
+    </div>
+    <div class="crop-foot">
+      <button class="btn ghost" id="cropReset" type="button">重选</button>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="cropCancel" type="button">取消</button>
+      <button class="btn primary" id="cropConfirm" type="button">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 题目编辑抽屉 ============ -->
+<div class="drawer-mask hidden" id="editorMask"></div>
+<aside class="drawer hidden" id="editor">
+  <div class="drawer-head">
+    <div>
+      <h2 id="editorTitle">题目详情</h2>
+      <p class="muted small" id="editorMeta"></p>
+    </div>
+    <button class="icon-btn" id="editorClose">✕</button>
+  </div>
+  <div class="drawer-body">
+    <div class="editor-preview" id="editorPreview">
+      <div class="preview-crop" id="previewCrop"></div>
+      <div class="preview-math" id="previewMath"></div>
+      <div class="formula-warnings hidden" id="formulaWarnings"></div>
+    </div>
+    <div class="editor-form">
+      <label class="field"><span>学科</span><input id="fSubject" list="subjectList" placeholder="如：数学"></label>
+      <div class="field-row">
+        <label class="field"><span>题型</span>
+          <select id="fType">
+            <option value="">未标注</option>
+            <option>选择题</option><option>填空题</option><option>解答题</option><option>证明题</option><option>其他</option>
+          </select>
+        </label>
+        <label class="field"><span>难度</span>
+          <select id="fDifficulty">
+            <option value="">未标注</option>
+            <option value="1">1 易</option><option value="2">2</option><option value="3">3 中</option><option value="4">4</option><option value="5">5 难</option>
+          </select>
+        </label>
+      </div>
+      <label class="field"><span>题目（支持 $…$ / $$…$$ 与 Markdown）</span>
+        <textarea id="fStem" rows="5"></textarea>
+      </label>
+      <label class="field"><span>答案</span>
+        <textarea id="fAnswer" rows="2"></textarea>
+      </label>
+      <label class="field"><span>错误原因</span>
+        <textarea id="fError" rows="3"></textarea>
+      </label>
+      <label class="field"><span>纠正解析</span>
+        <textarea id="fFix" rows="5"></textarea>
+      </label>
+      <label class="field"><span>另解</span>
+        <textarea id="fAlt" rows="4"></textarea>
+      </label>
+      <div class="field">
+        <span>题图（TikZ 源码，可留空；AI 会自动重绘几何图形）</span>
+        <textarea id="fTikz" rows="6" spellcheck="false" placeholder="\begin{tikzpicture}
+  \draw (0,0) -- (6,0) -- (3,4) -- cycle;
+  \node[below left] at (0,0) {$B$};
+\end{tikzpicture}"></textarea>
+        <div class="tikz-bar">
+          <button class="mini-btn" id="btnRenderTikz" type="button">渲染预览</button>
+          <span class="tikz-hint" id="tikzHint">改完点一次；保存时也会自动编译</span>
+        </div>
+      </div>
+      <div class="field">
+        <span>化学结构式（SMILES，每行「名称: SMILES」；苯酚写 Oc1ccccc1）</span>
+        <textarea id="fSmiles" rows="3" spellcheck="false" placeholder="苯酚: Oc1ccccc1
+乙酸乙酯: CCOC(C)=O"></textarea>
+        <div class="tikz-bar">
+          <button class="mini-btn" id="btnRenderChem" type="button">渲染结构式</button>
+          <span class="tikz-hint" id="chemHint">必须是标准 SMILES；写 CH3CH2OH 这种教材格式会解析失败</span>
+        </div>
+      </div>
+      <div class="field">
+        <span>工艺流程图 / 有机合成路线（JSON：steps 按顺序写，label 是箭头上的条件，side 是支线，某步有 smiles 就画结构式）</span>
+        <textarea id="fFlow" rows="6" spellcheck="false" placeholder='{"steps":[{"name":"铝土矿","note":"Al2O3、SiO2"},{"name":"碱浸","label":"过量 NaOH 溶液"},{"name":"过滤"}],"side":[{"after":3,"name":"滤渣"}]}'></textarea>
+        <div class="tikz-bar">
+          <button class="mini-btn" id="btnRenderFlow" type="button">渲染流程图</button>
+          <span class="tikz-hint" id="flowHint">默认横向、不加方框；过长会自动折行</span>
+        </div>
+      </div>
+      <label class="switch"><input type="checkbox" id="fNeedsFigure"> 改用原题截图（AI 重绘不如原图时勾上）</label>
+      <div class="figure-crop" id="figureCropBox">
+        <div class="figure-crop-head">
+          <span>题图裁剪</span>
+          <button class="mini-btn" id="btnCropFigure" type="button">框选图形</button>
+          <button class="mini-btn" id="btnClearFigureCrop" type="button" hidden>恢复整块截图</button>
+          <button class="mini-btn" id="btnReEnhanceFigure" type="button" hidden>重新增强</button>
+        </div>
+        <div class="figure-crop-body" id="figureCropPreview">
+          <span class="empty-note">未裁剪 · 导出时贴整块题目截图</span>
+        </div>
+      </div>
+      <label class="field"><span>知识点（顿号或逗号分隔）</span>
+        <input id="fKp" placeholder="如：导数、单调性">
+      </label>
+      <label class="field"><span>备注</span>
+        <input id="fNotes">
+      </label>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <label class="switch"><input type="checkbox" id="fStarred"> 收藏</label>
+    <div class="spacer"></div>
+    <button class="btn ghost" id="btnReSolve">重新解析</button>
+    <button class="btn ghost danger" id="btnDeleteQuestion">删除</button>
+    <button class="btn primary" id="btnSaveQuestion">保存</button>
+  </div>
+</aside>
+
+<!-- ============ 设置 ============ -->
+<div class="modal-mask hidden" id="settingsMask">
+  <div class="modal" id="settingsModal">
+    <div class="modal-head">
+      <h2>设置</h2>
+      <button class="icon-btn" id="settingsClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <section class="settings-block">
+        <h3>学科</h3>
+        <p class="muted small">AI 按学科调整提示词：数学、物理用 LaTeX 排公式，其他学科按纯文本处理，不会写成一堆反斜杠。</p>
+        <label class="field"><span>默认学科</span><input id="sSubject" list="subjectList" placeholder="如：数学"></label>
+      </section>
+      <section class="settings-block">
+        <h3>AI 服务</h3>
+        <p class="muted small">API Key 只写进本机 <code>data/config.json</code>（仅当前用户可读），浏览器端只拿到掩码。</p>
+        <div class="field-row">
+          <label class="field"><span>服务配置</span><select id="sConfig"></select></label>
+          <label class="field"><span>模型</span><select id="sModel"></select></label>
+        </div>
+        <div class="row-actions">
+          <button class="btn ghost" id="btnFetchModels">从接口拉取模型</button>
+          <button class="btn ghost" id="btnTestConfig">测试连通性</button>
+          <span class="muted small" id="testResult"></span>
+        </div>
+        <details class="cfg-editor" id="cfgEditor">
+          <summary>添加 / 编辑服务</summary>
+          <div class="field-row">
+            <label class="field"><span>名称</span><input id="sCfgName" placeholder="如：主接口"></label>
+            <label class="field"><span>接口地址</span><input id="sCfgBase" placeholder="https://…/v1" autocomplete="off"></label>
+          </div>
+          <label class="field"><span>API Key</span>
+            <input id="sCfgKey" type="password" autocomplete="new-password"
+                   placeholder="留空＝不修改已有的 Key">
+          </label>
+          <label class="field"><span>模型列表（逗号或空格分隔，可留空后从接口拉取）</span>
+            <textarea id="sCfgModels" rows="2" placeholder="mimo-v2.5-pro, gpt-4o-mini"></textarea>
+          </label>
+          <div class="row-actions">
+            <button class="btn ghost" id="btnNewConfig">新建一条</button>
+            <button class="btn ghost" id="btnDeleteConfig">删除当前</button>
+            <div class="spacer"></div>
+            <button class="btn" id="btnSaveConfig">保存这条配置</button>
+          </div>
+          <p class="muted small" id="cfgHint"></p>
+        </details>
+        <label class="field"><span>并发数（同时解析几题）</span>
+          <input id="sConcurrency" type="number" min="1" max="6" value="2">
+        </label>
+        <label class="switch"><input type="checkbox" id="sPreferJson"> 优先要求 JSON 输出（不支持的模型会自动降级）</label>
+      </section>
+            <section class="settings-block">
+        <h3>最近 AI 调用</h3>
+        <div class="log-summary" id="logSummary">暂无记录</div>
+        <div class="log-list" id="logList"></div>
+      </section>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="btnImportHint">如何导入配置？</button>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="settingsShutdown">关闭服务</button>
+      <button class="btn primary" id="settingsSave">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 试卷预览 ============ -->
+<div class="modal-mask hidden" id="previewMask">
+  <div class="modal preview-modal">
+    <div class="modal-head">
+      <h2>排版预览</h2>
+      <div class="head-actions">
+        <span class="muted small">与导出 PDF 一致</span>
+        <button class="icon-btn" id="previewClose">✕</button>
+      </div>
+    </div>
+    <div class="modal-body preview-body"><iframe id="previewFrame" title="试卷预览"></iframe></div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script src="/vendor/katex/katex.min.js"></script>
+<!-- mhchem：\ce{} 化学式（H2SO4、2H2+O2->2H2O、Ca^{2+}…），必须排在 katex 之后 -->
+<script src="/vendor/katex/contrib/mhchem.min.js"></script>
+<script src="/vendor/dompurify/dist/purify.min.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

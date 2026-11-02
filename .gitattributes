@@ -1,0 +1,25 @@
+# 换行符策略
+# 源码统一 LF（跨平台 diff 干净）。
+* text=auto eol=lf
+
+# 启动脚本**不参与换行转换**（-text = 按二进制存），仓库里必须原样保留 CRLF。
+# 用 eol=crlf 只管检出，仓库里仍是 LF —— 用户从 GitHub 下 ZIP 拿到的是 LF 的
+# .bat，cmd 会按字节错位切行（报 `'e' 不是内部或外部命令`）。
+*.bat -text
+*.cmd -text
+*.vbs -text
+*.ps1 -text
+
+# 二进制资源
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff2 binary
+*.woff binary
+*.ttf binary
+*.pdf binary
+*.docx binary
+*.zip binary

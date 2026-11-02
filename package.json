@@ -1,0 +1,9 @@
+{
+  "name": "ai-mistake-workbench",
+  "private": true,
+  "version": "1.0.0",
+  "description": "本地工具运行时依赖：目前只有题图渲染（TikZ -> SVG）",
+  "dependencies": {
+    "node-tikzjax": "^1.0.5"
+  }
+}

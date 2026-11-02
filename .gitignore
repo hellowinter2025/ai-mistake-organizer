@@ -1,0 +1,26 @@
+# 运行时数据
+data/
+logs/
+.env
+
+# Node（题图渲染运行时依赖，npm install 生成）
+node_modules/
+# TeX 字体（3.8MB，首次渲染时从 node_modules 自动同步）
+web/vendor/tikz/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# 工作区记忆与项目数据
+.workbuddy/
