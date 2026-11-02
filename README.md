@@ -181,6 +181,7 @@ PDF 里 SVG 直接矢量渲染；DOCX 里先用无头浏览器把 SVG 栅格化�
 它会把"整段原始 JSON 塞进题干"的降级题重新解析。
 
 字面量 `\n`（多转义一层留下的两个字符）可用 `python tools/scan_literal_escapes.py` 扫，
+更全面的体检用 `python tools/audit_question_text.py`：一次列出字面量转义、HTML 残留、控制字符、JSON 尾巴、`$` 定界符奇数、零宽字符，`--apply` 修可确定的那几类。
 加 `--fix` 就地改回真换行。判据是查 TeX 命令表：`\notin`、`\theta`、`\to`、`\node`
 这些原样保留，只有 `\nA. …`、`\n所以` 这种才替换。
 
@@ -274,6 +275,7 @@ AI 输出 → 归一化 → 存储 → 渲染（KaTeX）→ 导出（PDF 用 KaT
 | `tests/test_tikz.py` | TikZ 规范化、危险命令拦截、编译产出、缓存、坏语法报错 |
 | `tests/test_api.py` | 上传校验、CSRF/令牌/Host 防护、AI 调用（mock）、题库 CRUD、组卷导出 |
 | `tests/test_ai_config.py` | AI 服务配置增删改：Key 只给掩码、不传即沿用、传 `null` 才清空、删掉当前配置后自动切换 |
+| `tests/test_text_audit.py` | 文本体检工具自检：`\n` 能抓到、TeX 命令不误伤、「（　　）」不算脏 |
 
 ## 5. 目录结构
 

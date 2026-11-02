@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.ai.parser import strip_json_tail, unescape_literals  # noqa: E402
+from app.ai.parser import _is_tex_command, strip_json_tail, unescape_literals  # noqa: E402
 
 DB = ROOT / "data" / "app.db"
 
@@ -38,15 +38,32 @@ FIELDS = [
 BACKSLASH = chr(92)
 
 RULES: list[tuple[str, re.Pattern[str], str]] = [
-    ("字面量 \\n/\\r/\\t", re.compile(r"(?<!\\)\\(n|r|t)(?![A-Za-z])"), "unescape"),
     ("双反斜杠转义", re.compile(r"\\\\[nrt](?![A-Za-z])"), "unescape"),
     ("unicode 转义文本", re.compile(r"\\u[0-9a-fA-F]{4}"), "unescape_u"),
     ("HTML 残留", re.compile(r"</?(?:br|p|div|span|b|i|strong|em)\s*/?>|&nbsp;|&lt;|&gt;|&amp;"), "html"),
     ("控制字符", re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]"), "ctrl"),
     ("JSON 尾巴", re.compile(r'"(?:knowledge_points|difficulty|confidence)"\s*:'), "json_tail"),
     ("裸 null 当正文", re.compile(r"(?:^|\s)(?:null|None|undefined|NaN)(?:\s|$)"), "report"),
-    ("零宽 / 全角空格", re.compile(r"[\u200b-\u200d\ufeff\u3000]"), "blank"),
+    ("零宽字符", re.compile(r"[\u200b-\u200d\ufeff]"), "blank"),
+    ("全角空格（非括号内）", re.compile(r"\u3000"), "blank"),
 ]
+
+# 字面量 \n / \r / \t：不能只看「后面是不是字母」——`\nB 项错误` 后面就是字母，
+# 但它确实是换行；而 `\ne`、`\to`、`\theta`、`\node` 是真命令。判据与解析层一致：
+# 把整个词丢进 TeX 命令表查。
+LITERAL_ESCAPE = re.compile(r"\\([nrt])")
+
+
+def literal_escape_spans(text: str) -> list[int]:
+    out: list[int] = []
+    for m in LITERAL_ESCAPE.finditer(text):
+        i = m.start() + 1
+        j = i
+        while j < len(text) and text[j].isascii() and text[j].isalpha():
+            j += 1
+        if not _is_tex_command(text[i:j]):
+            out.append(m.start())
+    return out
 
 DOLLAR = re.compile(r"(?<!\\)\$")
 
@@ -54,8 +71,14 @@ DOLLAR = re.compile(r"(?<!\\)\$")
 def scan_value(field: str, text: str) -> list[tuple[str, str, str]]:
     """返回 [(规则名, 修复方式, 片段说明)]。"""
     out: list[tuple[str, str, str]] = []
+    # 选择题的「（　　）」用全角空格占位是正常写法，不算脏数据
+    probe = re.sub(r"[（(][\s\u3000]*[）)]", "", text)
+    for pos in literal_escape_spans(text)[:1]:
+        snippet = text[max(0, pos - 18): pos + 14].replace("\n", "⏎")
+        out.append(("字面量 \\n/\\r/\\t", "unescape", snippet))
     for name, pattern, action in RULES:
-        m = pattern.search(text)
+        target = probe if name.startswith("全角空格") else text
+        m = pattern.search(target)
         if not m:
             continue
         snippet = text[max(0, m.start() - 18): m.start() + 14].replace("\n", "⏎")
