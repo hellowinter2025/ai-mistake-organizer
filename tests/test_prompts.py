@@ -268,10 +268,17 @@ def test_method_hint_absent_for_text_subjects():
             assert "触发点：" not in text, (subject, json_mode)
 
 
-def test_method_hint_bans_college_tools():
-    text = prompts.system_prompt(True, "数学")
-    for banned in ("洛必达", "泰勒", "中值定理"):
-        assert banned in text
+def test_method_hint_stays_in_syllabus_without_naming_advanced_tools():
+    """只说"按教材来"，**不要**罗列洛必达/泰勒/中值定理。
+
+    点名禁用等于把这些词写进提示词，反而给模型提供了一条超纲思路的入口；
+    正面限定范围就够了。
+    """
+    for json_mode in (True, False):
+        text = prompts.system_prompt(json_mode, "数学")
+        assert "高中教材" in text
+        for banned in ("洛必达", "泰勒", "中值定理", "拉格朗日乘数"):
+            assert banned not in text, banned
 
 
 def test_solution_fix_description_mentions_method():
