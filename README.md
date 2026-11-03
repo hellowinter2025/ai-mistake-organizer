@@ -107,6 +107,36 @@ uvicorn 正常收尾——关连接、刷日志、释放端口，不是硬杀进
 
 切到「组卷导出」标签页会自动刷新列表。
 
+### 批量录入（图片 → 题库，不烧 token）
+
+几十张错题照片时，在界面里一题一题框选太慢。仓库自带一套录入 skill
+（WorkBuddy skill 格式）：让 agent **自己看图**抄题、写解析，脚本只做
+「上传 / 裁剪 / 入库」三件本地事。
+
+```
+skills/错题录入/
+  SKILL.md          录入规范：字段口径、图形重绘 vs 贴原图、查重、批量节奏
+  scripts/mm.py     upload / preview / crop / add / get / search
+```
+
+| 命令 | 作用 |
+| --- | --- |
+| `mm.py health` | 确认服务与令牌 |
+| `mm.py upload <目录>` | 批量上传，按 sha256 去重 |
+| `mm.py preview <id> --out p.png` | 整图 + 编号候选框，用来核对选区 |
+| `mm.py crop <id> --span 0.05:0.33 …` | 按纵向区间（或 `--x` 分栏、`--box` 像素、`--index` 编号）裁题 |
+| `mm.py add --json batch.json --dry-run` | 校验（题型/答案/字面量 `\n`）+ 查重 + 入库 |
+
+**关键：整条链路不调用任何模型接口。** 为此新增了两个纯本地接口：
+
+- `POST /api/images/{id}/crop` — 按选区裁剪并落盘，返回 `crop_token`。
+  原来只有 `POST /api/ai/solve`（裁图 + 调模型打包在一起），外部录入用不上后一半；
+- `POST /api/images/{id}/preview` — 把框画在整图上（PNG，带编号），
+  不传框就先跑一遍自动切题，用来把「候选编号」和「第几题」对上。
+
+自检：`.venv\Scripts\python.exe tools\intake_smoke.py`
+（模拟一张错题照片跑完整链路，跑完自动清理）。
+
 ### 题图（几何图形）
 
 模型手写 SVG 坐标是最容易翻车的一环：它得自己在 400×300 像素里换算，标签位置靠估，
@@ -275,6 +305,8 @@ AI 输出 → 归一化 → 存储 → 渲染（KaTeX）→ 导出（PDF 用 KaT
 | `tests/test_figure.py` | SVG 白名单过滤（script/onload/javascript:/foreignObject/image）、栅格化 |
 | `tests/test_tikz.py` | TikZ 规范化、危险命令拦截、编译产出、缓存、坏语法报错 |
 | `tests/test_api.py` | 上传校验、CSRF/令牌/Host 防护、AI 调用（mock）、题库 CRUD、组卷导出 |
+| `tests/test_image_crop.py` | 选区裁剪与预览：token 可入库、归一化框换算、多框保序、**不触发 AI 调用** |
+| `tests/test_intake_cli.py` | 录入脚本的校验与查重：字面量 `\n` 拦截、TeX 命令不误伤、查重探针是库中连续片段、选区换算 |
 | `tests/test_ai_config.py` | AI 服务配置增删改：Key 只给掩码、不传即沿用、传 `null` 才清空、删掉当前配置后自动切换 |
 | `tests/test_text_audit.py` | 文本体检工具自检：`\n` 能抓到、TeX 命令不误伤、「（　　）」不算脏 |
 
@@ -301,7 +333,7 @@ app/
   routes/            上传、AI、题库、试卷、设置、系统（/api/shutdown）、题图（/api/tikz）
 web/
   index.html  css/app.css  js/*.js  vendor/katex  vendor/dompurify
-tests/  tools/  data/（运行时生成，已 gitignore）
+skills/  tests/  tools/  data/（运行时生成，已 gitignore）
 启动.vbs             无窗口启动（推荐）
 启动.bat             带控制台启动（排错用）
 start.py             启动器：开浏览器、注册优雅退出回调
