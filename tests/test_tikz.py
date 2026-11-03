@@ -184,3 +184,49 @@ def test_calc_library_is_available():
     assert "<path" in svg
     # 中点应落在 (-43.6,-43.6) 一线，不能退化成只画那条线
     assert svg.count("<path") >= 2
+
+
+def test_calc_is_autoloaded_for_dollar_syntax():
+    r"""写了 ``$(A)!0.5!(B)$`` 却没声明 calc 时，引擎要自己补上。
+
+    不改的话模型少写一行库声明，整张图就编译失败——而它只会退回贴原题截图。
+    """
+    code = (
+        "\\begin{tikzpicture}\n"
+        "\\coordinate (A) at (0,0); \\coordinate (B) at (2,2);\n"
+        "\\coordinate (M) at ($(A)!0.5!(B)$);\n"
+        "\\draw (A)--(M)--(B);\n"
+        "\\end{tikzpicture}"
+    )
+    result = tikz.render(code, use_cache=False)
+    assert "<path" in result.svg
+    assert any("calc" in fix for fix in result.fixes)
+    assert "calc" in result.code
+
+
+def test_usetikzlibrary_outside_environment_is_hoisted():
+    r"""模型常把 ``\usetikzlibrary{calc}`` 写在环境外面，不能把它丢掉。"""
+    code = (
+        "\\usetikzlibrary{calc}\n"
+        "\\begin{tikzpicture}\n"
+        "\\coordinate (M) at ($(0,0)!0.5!(2,2)$);\n"
+        "\\draw (0,0)--(M)--(2,2);\n"
+        "\\end{tikzpicture}"
+    )
+    result = tikz.render(code, use_cache=False)
+    assert "<path" in result.svg
+    assert "usetikzlibrary{calc}" in result.code
+    assert result.code.index("usetikzlibrary") > result.code.index("begin{tikzpicture}")
+
+
+def test_fillbetween_library_is_dropped():
+    r"""引擎没装 pgfplots 的 fillbetween，留着必然编译失败，直接摘掉。"""
+    code = (
+        "\\begin{tikzpicture}\n"
+        "\\usetikzlibrary{fillbetween}\n"
+        "\\draw (0,0)--(1,1);\n"
+        "\\end{tikzpicture}"
+    )
+    result = tikz.render(code, use_cache=False)
+    assert "fillbetween" not in result.code
+    assert any("fillbetween" in fix for fix in result.fixes)

@@ -48,6 +48,57 @@ _BANNED = re.compile(
 
 _FENCE = re.compile(r"^\s*```+[a-zA-Z]*\s*|\s*```+\s*$")
 _TIKZ_BLOCK = re.compile(r"\\begin\{tikzpicture\}.*?\\end\{tikzpicture\}", re.S)
+_LIB = re.compile(r"\\usetikzlibrary\s*\{([^}]*)\}")
+# 引擎里没装这些库，写进来只会让整张图编译失败
+_LIB_BANNED = {"fillbetween"}
+
+
+def _collect_libs(text: str) -> list[str]:
+    names: list[str] = []
+    for m in _LIB.finditer(text or ""):
+        for name in re.split(r"[,\s]+", m.group(1)):
+            name = name.strip()
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def _apply_libs(body: str, outside: list[str]) -> tuple[str, str, list[str]]:
+    """处理 tikz 库声明，返回 (body, 要插到环境里的前缀, 修复说明)。
+
+    两个真实坑：
+    1. 模型把 ``\\usetikzlibrary{calc}`` 写在 ``\\begin{tikzpicture}`` **前面**——
+       这里只截取 tikzpicture 那一块，库声明被整段丢掉，calc 语法随后报错；
+    2. 用了 ``$(A)!0.5!(B)$`` 却没声明 calc，白画一张图。
+    """
+    fixes: list[str] = []
+
+    def drop_banned(m: re.Match[str]) -> str:
+        names = [n.strip() for n in re.split(r"[,\s]+", m.group(1)) if n.strip()]
+        if not any(n in _LIB_BANNED for n in names):
+            return m.group(0)
+        fixes.append(f"去掉了引擎没装的 tikz 库 {'、'.join(n for n in names if n in _LIB_BANNED)}")
+        return ""
+
+    body = _LIB.sub(drop_banned, body)
+    inside = _collect_libs(body)
+    names = list(inside)
+    for name in outside:
+        if name in _LIB_BANNED:
+            continue
+        if name not in names:
+            names.append(name)
+            fixes.append(f"把环境外的 \\usetikzlibrary{{{name}}} 挪进了环境里")
+
+    if "$(" in body and "calc" not in names:
+        names.insert(0, "calc")
+        fixes.append("用到了 calc 坐标语法，自动加载 tikz 库 calc")
+
+    # body 里本来就有的声明不动它——挪一行不值得把整段代码都改写
+    newly = [n for n in names if n not in inside]
+    prefix = f"\\usetikzlibrary{{{','.join(newly)}}}" if newly else ""
+    return body, prefix, fixes
+
 
 
 class TikzError(RuntimeError):
@@ -153,6 +204,9 @@ def repair_environment(code: str) -> tuple[str, list[str]]:
     begin = "\\begin{tikzpicture}"
     end = "\\end{tikzpicture}"
     block = _TIKZ_BLOCK.search(text)
+    # 模型常把 \usetikzlibrary 写在环境**前面**，而这里只截取 tikzpicture 那一块，
+    # 库声明就被整段丢掉了（calc 语法随之报错）。先把外面的库声明捡回来。
+    outside_libs = _collect_libs(text.replace(block.group(0), "") if block else "")
     if block:
         chunk = block.group(0)
         body = chunk[len(begin) : chunk.rfind(end)]
@@ -194,16 +248,20 @@ def repair_environment(code: str) -> tuple[str, list[str]]:
     if body.startswith("[") and "[" in raw_body:
         moved = any(ch in raw_body[: raw_body.find("[")] for ch in "\r\n")
     reflowed = False
+    body, lib_prefix, lib_fixes = _apply_libs(body, outside_libs)
+    fixes.extend(lib_fixes)
     if body.startswith("["):
         # 选项一律贴着 \begin{tikzpicture} 输出；只有"原本被折行挤下去"才算修过
         cut = body.find("]")
         opts, rest = body[: cut + 1], body[cut + 1 :].strip()
-        text = begin + opts + ("\n" + rest + "\n" if rest else "") + end
+        inner = "\n".join(p for p in (lib_prefix, rest) if p)
+        text = begin + opts + ("\n" + inner + "\n" if inner else "") + end
         if moved:
             reflowed = True
             fixes.append("环境选项拉回到 \\begin 后面")
     else:
-        text = begin + ("\n" + body + "\n" if body else "") + end
+        inner = "\n".join(p for p in (lib_prefix, body) if p)
+        text = begin + ("\n" + inner + "\n" if inner else "") + end
 
     if len(text) > MAX_CODE:
         raise TikzError(f"代码过长（{len(text)} 字符）")

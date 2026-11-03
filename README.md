@@ -111,12 +111,14 @@ uvicorn 正常收尾——关连接、刷日志、释放端口，不是硬杀进
 
 几十张错题照片时，在界面里一题一题框选太慢。仓库自带一套录入 skill
 （WorkBuddy skill 格式）：让 agent **自己看图**抄题、写解析，脚本只做
-「上传 / 裁剪 / 入库」三件本地事。
+「上传 / 裁剪 / 渲染 / 入库」几件本地事。
+题干里有图默认**自己画 TikZ**；画完必须 `mm.py render` 出 PNG 看过再入库，
+实在画不了（实验装置实物、照片、地图）才贴截图，并且用 `mm.py figure` 只框图形本体。
 
 ```
 skills/错题录入/
   SKILL.md          录入规范：字段口径、图形重绘 vs 贴原图、查重、批量节奏
-  scripts/mm.py     upload / preview / crop / add / get / search
+  scripts/mm.py     upload / preview / crop / render / figure / add / update / get / search
 ```
 
 | 命令 | 作用 |
@@ -125,7 +127,10 @@ skills/错题录入/
 | `mm.py upload <目录>` | 批量上传，按 sha256 去重 |
 | `mm.py preview <id> --out p.png` | 整图 + 编号候选框，用来核对选区 |
 | `mm.py crop <id> --span 0.05:0.33 …` | 按纵向区间（或 `--x` 分栏、`--box` 像素、`--index` 编号）裁题 |
-| `mm.py add --json batch.json --dry-run` | 校验（题型/答案/字面量 `\n`）+ 查重 + 入库 |
+| `mm.py render fig.tex` | 把 TikZ 编译成 PNG，**用来自己核对图画得对不对**（点数/墨迹/标注/自动修复项） |
+| `mm.py figure <编号> --box x,y,w,h [--apply]` | 画不了图时，从题目截图里只框图形本体（避免题干文字被一起印上去） |
+| `mm.py add --json batch.json --dry-run` | 校验（题型/答案/字面量 `\n`/TikZ）+ 查重 + 入库 |
+| `mm.py update <编号> patch.json` | 改既有题的答案/解析/题图 |
 
 **关键：整条链路不调用任何模型接口。** 为此新增了两个纯本地接口：
 

@@ -61,7 +61,27 @@ FIELDS = (
     "tags",
     "notes",
     "needs_figure",
+    # 「让引擎自己画」的三个源字段——不计入的话，脚本根本没法提交重绘的图，
+    # 只能一路 needs_figure=1 贴截图（AGX2PK 就是这么退化的）
+    "figure_tikz",
+    "figure_smiles",
+    "figure_flow",
 )
+
+# 给了这几个字段就等于「图由代码画」，不该再退回原题截图
+FIGURE_FIELDS = ("figure_tikz", "figure_smiles", "figure_flow")
+
+# TeX 里出现这些一定会在我们的引擎上炸（没有 shell-escape、没有外部文件）
+TIKZ_BANNED = (
+    "\\documentclass",
+    "\\usepackage",
+    "\\begin{document}",
+    "\\input",
+    "\\include",
+    "\\usepgfplotslibrary{fillbetween}",
+)
+
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -391,6 +411,190 @@ def cmd_crop(api: Api, args: argparse.Namespace) -> None:
     print("\n下一步：看图写字段 → mm.py add --json <文件>")
 
 
+def read_code_arg(src: str) -> str:
+    if src == "-":
+        return sys.stdin.read()
+    path = Path(src).expanduser()
+    if not path.is_file():
+        sys.exit(f"读不到 TikZ 文件：{path}")
+    return path.read_text(encoding="utf-8")
+
+
+def png_stats(data: bytes) -> tuple[int, int, float]:
+    """(宽, 高, 墨迹占比)。墨迹占比专门用来发现「编译成功但整幅画空」。"""
+    try:
+        import io
+
+        from PIL import Image
+    except ImportError:  # pragma: no cover - venv 一定带 Pillow
+        return 0, 0, -1.0
+    with Image.open(io.BytesIO(data)) as im:
+        gray = im.convert("L")
+        width, height = gray.size
+        hist = gray.histogram()
+    return width, height, sum(hist[:200]) / max(1, width * height)
+
+
+def render_report(png: bytes, svg: str) -> tuple[list[str], dict[str, Any]]:
+    """把「这张图渲染得对不对」变成一个可以判定的事实，而不是靠感觉。
+
+    静态能查的只有形态问题（画空、过扁、没有标注），真正的几何关系对不对
+    还得把 PNG 打开看——这个函数负责把该看的指标摊出来。
+    """
+    width, height, ink = png_stats(png)
+    texts = len(re.findall(r"<text\b", svg or ""))
+    paths = len(re.findall(r"<path\b", svg or ""))
+    warns: list[str] = []
+    if ink >= 0 and ink < 0.002:
+        warns.append("几乎空白：编译成功了但图上几乎没有墨迹，八成坐标写错或线被裁掉")
+    if width and height:
+        ratio = width / height
+        if ratio > 6:
+            warns.append(f"过扁（宽高比 {ratio:.1f}）：排版时会被压成看不清的小条")
+        elif ratio < 0.2:
+            warns.append(f"过窄（宽高比 {ratio:.1f}）：确认是不是竖向长图")
+    if texts == 0:
+        warns.append("图里没有任何文字标注（点的字母、角度值都没标？）")
+    if paths == 0:
+        warns.append("图里没有任何路径（\\draw 没生效？）")
+    info = {"width": width, "height": height, "ink": round(ink, 4), "texts": texts, "paths": paths}
+    return warns, info
+
+
+def cmd_render(api: Api, args: argparse.Namespace) -> None:
+    """编译 TikZ → PNG → 落盘，然后**自己打开看**。
+
+    这是「画完自检」的第一步：不下发这一步，重绘的图错了也发现不了，
+    最后还是会退化成贴原题截图。
+    """
+    code = read_code_arg(args.source)
+    if not code.strip():
+        sys.exit("TikZ 代码为空")
+    res = api.post("/api/tikz/render", {"code": code})
+    svg = str(res.get("svg") or "")
+    if "<svg" not in svg.lower():
+        sys.exit("渲染返回的不是 SVG")
+    url = res.get("image_url")
+    if not url:
+        sys.exit("服务端没给出 PNG 地址（浏览器栅格化失败，检查 Chrome/Edge 是否在）")
+    png = api.get(url)
+
+    import hashlib
+
+    if args.out:
+        dest = Path(args.out).expanduser()
+    else:
+        tag = hashlib.sha1(code.encode("utf-8")).hexdigest()[:8]
+        dest = Path(tempfile.gettempdir()) / "mm_intake" / "figs" / f"tikz_{tag}.png"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(png)
+
+    warns, info = render_report(png, svg)
+    fixes = res.get("fixes") or []
+    payload = {
+        "png": str(dest),
+        **info,
+        "ms": res.get("ms"),
+        "cached": res.get("cached"),
+        "fixes": fixes,
+        "warnings": warns,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    print(f"渲染图：{dest}")
+    print(
+        f"  {info['width']}x{info['height']}px  墨迹 {info['ink'] * 100:.1f}%  "
+        f"标注 {info['texts']} 个  路径 {info['paths']} 条  {res.get('ms')}ms"
+        f"{'（缓存）' if res.get('cached') else ''}"
+    )
+    for fix in fixes:
+        print(f"  自动修复：{fix}")
+    for warn in warns:
+        print(f"  ⚠ {warn}")
+    print("  下一步：打开这张 PNG 看几何关系对不对（点是否落在该在的线上、虚实线有没有打架）")
+
+
+def load_crop_image(api: Api, q: dict[str, Any]):
+    from PIL import Image
+
+    path = q.get("crop_path")
+    if path and Path(str(path)).is_file():
+        return Image.open(str(path)).convert("RGB")
+    url = q.get("crop_url")
+    if not url:
+        sys.exit("这题没有原题截图，没法裁图（先在有截图的题上用，或用 --box 相对整页裁）")
+    import io
+
+    return Image.open(io.BytesIO(api.get(url))).convert("RGB")
+
+
+def normalize_figure_box(spec: str, width: int, height: int) -> list[float]:
+    """``--box`` 支持 0~1 比例或像素；统一成相对题目截图的归一化框。"""
+    raw = parse_box_spec(spec)
+    if max(raw) <= 1.0001:
+        x, y, w, h = raw
+    else:
+        x, y, w, h = raw[0] / width, raw[1] / height, raw[2] / width, raw[3] / height
+    x = min(max(x, 0.0), 0.98)
+    y = min(max(y, 0.0), 0.98)
+    w = min(max(w, 0.02), 1.0 - x)
+    h = min(max(h, 0.02), 1.0 - y)
+    return [round(x, 4), round(y, 4), round(w, 4), round(h, 4)]
+
+
+def cmd_figure(api: Api, args: argparse.Namespace) -> None:
+    """把图形区域从题目截图里**单独框出来**（画不了图时的正确做法）。
+
+    直接贴整段题目的截图，导出时会把题干文字一起印在卷面上——和排版出来的
+    题干重复。这里按归一化框只裁图形本体，先出一张预览给我核对，
+    ``--apply`` 才真正写库。
+    """
+    q = resolve_question(api, args.key)
+    if not isinstance(q, dict) or not q.get("uid"):
+        sys.exit(f"没找到题目 {args.key}")
+    img = load_crop_image(api, q)
+    box = normalize_figure_box(args.box, img.width, img.height)
+    px = (
+        round(box[0] * img.width),
+        round(box[1] * img.height),
+        round(box[2] * img.width),
+        round(box[3] * img.height),
+    )
+
+    from PIL import ImageDraw
+
+    canvas = img.copy()
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle(
+        [px[0], px[1], px[0] + px[2], px[1] + px[3]],
+        outline=(220, 40, 40),
+        width=max(2, round(min(img.size) / 240)),
+    )
+    dest = Path(args.out).expanduser() if args.out else (
+        Path(tempfile.gettempdir()) / "mm_intake" / f"fig_box_{q.get('code') or q['uid'][:6]}.png"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest, "PNG")
+
+    print(f"# {q.get('code')}  原题截图 {img.width}x{img.height}")
+    print(f"框（归一化）：{box}  即 {px[2]}x{px[3]}px @ ({px[0]},{px[1]})")
+    print(f"预览：{dest}   ← 先看这张，框住的是不是只有图形本体")
+
+    if not args.apply:
+        print("确认无误后加 --apply 写库")
+        return
+
+    res = api.patch(f"/api/questions/{q['uid']}", {"figure_box": box, "needs_figure": 1})
+    updated = res.get("question") or {}
+    url = updated.get("figure_crop_url")
+    print(f"已写入：needs_figure={updated.get('needs_figure')}  figure_crop={updated.get('figure_crop')}")
+    if url:
+        saved = dest.with_name(dest.stem + "_crop.png")
+        saved.write_bytes(api.get(url))
+        print(f"裁好的图：{saved}   ← 再确认一次：文字有没有被框进来、图形有没有被切边")
+
+
 def normalise_title(text: str) -> str:
     """查重用的归一化：去空白、标点、LaTeX 定界符，只比正文骨架。"""
     stripped = re.sub(r"[\s$\\{}（）()\[\]，。、；：？！,.;:?!\"'“”‘’—\-_/|]+", "", text or "")
@@ -512,6 +716,41 @@ def validate(item: dict[str, Any]) -> tuple[list[str], list[str]]:
     if not split_list(item.get("knowledge_points")):
         warns.append("knowledge_points 为空")
 
+    tikz = str(item.get("figure_tikz") or "")
+    if tikz.strip():
+        errors_t, warns_t = check_tikz(tikz)
+        errors.extend(errors_t)
+        warns.extend(warns_t)
+        if item.get("needs_figure"):
+            warns.append(
+                "给了 figure_tikz 又标了 needs_figure=1：导出会贴原题截图，重绘的图白画"
+            )
+    elif item.get("needs_figure") and not (item.get("figure_smiles") or item.get("figure_flow")):
+        warns.append("needs_figure=1 但没有 figure_box：导出会贴整段题干截图（含文字），建议框出图形区域")
+
+    return errors, warns
+
+
+def check_tikz(code: str) -> tuple[list[str], list[str]]:
+    """入库前的 TikZ 静态检查——只管「必然编译失败」和「明显违反约定」。
+
+    真正画得对不对，只能靠 ``mm.py render`` 编译出 PNG 自己看，静态检查替代不了。
+    """
+    errors: list[str] = []
+    warns: list[str] = []
+
+    if "\\begin{tikzpicture}" not in code:
+        errors.append("figure_tikz 缺少 \\begin{tikzpicture}")
+    if "\\end{tikzpicture}" not in code:
+        # 引擎能补（repair_environment），但补出来的位置不一定对，还是提醒一下
+        warns.append("figure_tikz 没写 \\end{tikzpicture}（引擎会补，但补的位置可能不对）")
+    for bad in TIKZ_BANNED:
+        if bad in code:
+            errors.append(f"figure_tikz 里不能出现 {bad}（引擎不支持，必然编译失败）")
+    if CJK_RE.search(code):
+        warns.append("figure_tikz 里有汉字：图内不写汉字，中文说明写给题干")
+    if ";" not in code:
+        warns.append("figure_tikz 一条 \\draw 都没有分号，八成写错了")
     return errors, warns
 
 
@@ -519,7 +758,8 @@ def normalise_item(raw: dict[str, Any]) -> dict[str, Any]:
     """接受两种写法：扁平字段，或 ``{"fields": {...}, "crop_token": ...}``。"""
     if "fields" in raw and isinstance(raw["fields"], dict):
         fields = dict(raw["fields"])
-        for key in ("image_id", "crop_token", "bbox", "figure_box", "needs_figure"):
+        # 图形源字段允许写在包装层（和 crop_token 平级），别只认 fields 里面
+        for key in ("image_id", "crop_token", "bbox", "figure_box", "needs_figure", *FIGURE_FIELDS):
             if key in raw and key not in fields:
                 fields[key] = raw[key]
     else:
@@ -766,6 +1006,18 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--save-dir", help="把裁好的图下载到本目录，方便看图")
     add_region_args(cr)
     cr.set_defaults(func=cmd_crop)
+
+    rd = sub.add_parser("render", parents=[common], help="编译 TikZ 成 PNG，用来自己核对画得对不对")
+    rd.add_argument("source", help="TikZ 文件路径，或 - 表示 stdin")
+    rd.add_argument("--out", help="PNG 保存路径")
+    rd.set_defaults(func=cmd_render)
+
+    fg = sub.add_parser("figure", parents=[common], help="把图形区域从题目截图里框出来（画不了图时用）")
+    fg.add_argument("key", help="uid 或 6 位编号")
+    fg.add_argument("--box", required=True, metavar="x,y,w,h", help="相对题目截图的比例或像素")
+    fg.add_argument("--out", help="预览图保存路径")
+    fg.add_argument("--apply", action="store_true", help="确认后写库")
+    fg.set_defaults(func=cmd_figure)
 
     ad = sub.add_parser("add", parents=[common], help="校验 + 查重 + 入库（读 JSON）")
     ad.add_argument("json_file", help="JSON 文件路径，或 - 表示 stdin")

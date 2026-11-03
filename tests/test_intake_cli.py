@@ -175,3 +175,96 @@ def test_legacy_choice_type_only_warns(mm):
     errors, warns = mm.validate(_item(question_type="选择题", answer="B"))
     assert not any("question_type" in e for e in errors)
     assert any("旧写法" in w for w in warns)
+
+
+# ---------- 图形：重绘的 TikZ 必须能提交、必须过静态检查 ----------
+
+def test_normalise_item_keeps_tikz(mm):
+    """回归：FIELDS 里漏了 figure_tikz 时，脚本会把重绘的图整段丢掉。"""
+    item = mm.normalise_item(
+        {"fields": _item(), "figure_tikz": "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}"}
+    )
+    assert "figure_tikz" in item and "tikzpicture" in item["figure_tikz"]
+
+
+def test_tikz_missing_environment_is_error(mm):
+    errors, _ = mm.check_tikz("\\draw (0,0)--(1,1);")
+    assert any("begin{tikzpicture}" in e for e in errors)
+
+
+def test_tikz_unfinished_end_only_warns(mm):
+    """截断的 \\end 由引擎补，不该拦入库。"""
+    errors, warns = mm.check_tikz("\\begin{tikzpicture}\\draw (0,0)--(1,1);")
+    assert not errors
+    assert any("end{tikzpicture}" in w for w in warns)
+
+
+def test_tikz_rejects_engine_breaking_commands(mm):
+    for bad in ("\\usepackage{amsmath}", "\\documentclass{article}",
+                "\\usepgfplotslibrary{fillbetween}"):
+        errors, _ = mm.check_tikz("\\begin{tikzpicture}\\draw (0,0)--(1,1);" + bad + "\\end{tikzpicture}")
+        assert errors, bad
+
+
+def test_tikz_chinese_only_warns(mm):
+    errors, warns = mm.check_tikz("\\begin{tikzpicture}\\node at (0,0) {中点};\\draw (0,0)--(1,1);\\end{tikzpicture}")
+    assert not errors
+    assert any("汉字" in w for w in warns)
+
+
+def test_needs_figure_without_box_warns(mm):
+    """贴截图却不给 figure_box，导出会把整段题干一起印上去。"""
+    _, warns = mm.validate({**_item(), "needs_figure": 1})
+    assert any("figure_box" in w for w in warns)
+
+
+def test_tikz_with_needs_figure_warns(mm):
+    _, warns = mm.validate(
+        {**_item(), "needs_figure": 1,
+         "figure_tikz": "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}"}
+    )
+    assert any("needs_figure" in w for w in warns)
+
+
+def test_normalize_figure_box_accepts_ratio_and_pixels(mm):
+    assert mm.normalize_figure_box("0.1,0.2,0.3,0.4", 1000, 500) == [0.1, 0.2, 0.3, 0.4]
+    assert mm.normalize_figure_box("100,100,400,200", 1000, 500) == [0.1, 0.2, 0.4, 0.4]
+
+
+def test_normalize_figure_box_clamps_overflow(mm):
+    # 宽高超出右/下边界时要收回来，否则裁图会失败
+    box = mm.normalize_figure_box("0.8,0.8,0.9,0.9", 100, 100)
+    assert box[0] + box[2] <= 1.0001
+    assert box[1] + box[3] <= 1.0001
+
+
+# ---------- 渲染自检：能不能发现「编译成功但画空了」 ----------
+
+def _png(ink: bool) -> bytes:
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGB", (300, 200), (255, 255, 255))
+    if ink:
+        ImageDraw.Draw(img).line([(20, 100), (280, 100)], fill=(0, 0, 0), width=3)
+    buf = BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_render_report_flags_blank_image(mm):
+    warns, info = mm.render_report(_png(False), '<svg><text>x</text><path d="M0 0"/></svg>')
+    assert any("空白" in w for w in warns)
+    assert info["ink"] < 0.002
+
+
+def test_render_report_passes_normal_image(mm):
+    warns, info = mm.render_report(_png(True), '<svg><text>x</text><path d="M0 0"/></svg>')
+    assert not warns, warns
+    assert info["texts"] == 1
+
+
+def test_render_report_flags_missing_labels(mm):
+    warns, _ = mm.render_report(_png(True), '<svg><path d="M0 0"/></svg>')
+    assert any("标注" in w for w in warns)

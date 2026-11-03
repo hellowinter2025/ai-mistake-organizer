@@ -244,9 +244,23 @@ def test_difficulty_rubric_is_stated():
 def test_prompt_teaches_real_tikz_library_facts():
     """提示词里的库说明必须和引擎实际能力一致，否则模型会绕开正确画法。"""
     text = prompts.system_prompt(True, "数学")
-    assert "usetikzlibrary{calc}" in text          # calc 能用，且是取点的正解
+    assert "自动加载 calc" in text                 # calc 已由引擎兜住，不用模型自己声明
+    assert "usetikzlibrary{库名}" in text          # 其他库怎么加载也要说清
     assert "fillbetween" in text                  # 这个确实不能用，要说清
     assert "$(A1)!0.35!(D)$" in text              # 给出可直接照抄的定比分点写法
+
+
+def test_figure_policy_defaults_to_drawing():
+    """默认要自己画；只有实拍图才贴截图，而且必须给 figure_box。"""
+    for subject in ("数学", "物理", "化学"):
+        text = prompts.system_prompt(True, subject)
+        assert "默认就自己画" in text, subject
+        assert "figure_box" in text, subject
+
+    math = prompts.system_prompt(True, "数学")
+    assert "空间四边形" in math                    # 立体几何属于必须画的一类
+    chem = prompts.system_prompt(True, "化学")
+    assert "电子式" in chem and "要画" in chem
 
 
 # ---------- 高中方法解题提示 ----------
