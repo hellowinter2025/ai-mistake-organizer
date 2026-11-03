@@ -321,7 +321,9 @@ def cmd_analyze(api: Api, args: argparse.Namespace) -> None:
 
 def cmd_preview(api: Api, args: argparse.Namespace) -> None:
     boxes = resolve_boxes(api, args.image_id, args)
-    body = {"boxes": boxes} if boxes else {}
+    body: dict[str, Any] = {"boxes": boxes} if boxes else {}
+    if not args.no_grid:
+        body["grid"] = True  # 百分比刻度尺：估 --span 全靠它
     png = api.post(f"/api/images/{args.image_id}/preview", body)
     dest = Path(args.out).expanduser() if args.out else (
         Path(tempfile.gettempdir()) / "mm_intake" / f"{args.image_id}_preview.png"
@@ -329,6 +331,8 @@ def cmd_preview(api: Api, args: argparse.Namespace) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(png)
     print(f"预览图：{dest}（{len(boxes)} 个框{'（自动候选）' if not boxes else ''}）")
+    if not args.no_grid:
+        print("图上已叠加刻度：横线每 0.1（右侧标数值），竖线每 0.25。按它估 --span 起止值。")
 
 
 def cmd_crop(api: Api, args: argparse.Namespace) -> None:
@@ -667,6 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
     pv = sub.add_parser("preview", parents=[common], help="画框预览图（PNG），用来核对选区")
     pv.add_argument("image_id")
     pv.add_argument("--out", help="保存路径")
+    pv.add_argument("--no-grid", action="store_true", help="不要百分比刻度尺")
     add_region_args(pv)
     pv.set_defaults(func=cmd_preview)
 

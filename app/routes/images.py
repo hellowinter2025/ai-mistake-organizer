@@ -84,13 +84,31 @@ def _label_font(size: int) -> Any:
         return ImageFont.load_default()
 
 
-def _preview_png(img, boxes: list[list[int]]) -> bytes:
-    """整图 + 编号框的预览图。框多时靠它把「第几号候选」和题目对上，比猜坐标可靠。"""
+def _preview_png(img, boxes: list[list[int]], grid: bool = False) -> bytes:
+    """整图 + 编号框的预览图。框多时靠它把「第几号候选」和题目对上，比猜坐标可靠。
+
+    ``grid=True`` 时叠加百分比刻度尺：横向每 10%、纵向每 25% 画一条细线并标数值。
+    外部录入靠人眼在缩略图上估「这道题占哪一段」，没有刻度几乎必然偏 ——
+    刻度线让 ``--span 0.18:0.34`` 这种写法有依据。
+    """
     canvas = img.convert("RGB").copy()
     draw = ImageDraw.Draw(canvas)
     short = min(canvas.size)
     line_w = max(2, round(short / 380))
     font = _label_font(max(16, round(short / 26)))
+
+    if grid:
+        gfont = _label_font(max(14, round(short / 34)))
+        tick = max(1, line_w // 2)
+        for step in range(1, 10):
+            y = round(canvas.height * step / 10)
+            draw.line([(0, y), (canvas.width, y)], fill=(120, 190, 140), width=tick)
+            draw.text((4, y + 2), f"{step / 10:.1f}", fill=(20, 120, 60), font=gfont)
+        for step in range(1, 4):
+            x = round(canvas.width * step / 4)
+            draw.line([(x, 0), (x, canvas.height)], fill=(200, 200, 120), width=tick)
+            draw.text((x + 4, 4), f"{step / 4:.2f}", fill=(140, 120, 20), font=gfont)
+
     for i, (x, y, w, h) in enumerate(boxes):
         color = _PREVIEW_COLORS[i % len(_PREVIEW_COLORS)]
         draw.rectangle([x, y, x + w, y + h], outline=color, width=line_w)
@@ -242,7 +260,8 @@ async def preview_boxes(image_id: str, payload: dict[str, Any] | None = None) ->
         analysis = await run_in_threadpool(lambda: imaging.analyse(img, **opts))
         raw = [[c["x"], c["y"], c["w"], c["h"]] for c in analysis.get("candidates", [])]
     boxes = _parse_boxes(raw, img.width, img.height)
-    png = await run_in_threadpool(_preview_png, img, boxes)
+    grid = bool(body.get("grid"))
+    png = await run_in_threadpool(_preview_png, img, boxes, grid)
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 

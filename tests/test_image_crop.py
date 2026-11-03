@@ -106,6 +106,17 @@ def test_preview_defaults_to_auto_candidates(client, uploaded):
     assert res.headers["content-type"] == "image/png"
 
 
+def test_preview_with_grid_ruler(client, uploaded):
+    """刻度尺是估 --span 的依据：没有它只能靠肉眼猜，实测会差 0.02 以上。"""
+    plain = client.post(f"/api/images/{uploaded['id']}/preview", json={})
+    gridded = client.post(f"/api/images/{uploaded['id']}/preview", json={"grid": True})
+    assert gridded.status_code == 200
+    with Image.open(io.BytesIO(gridded.content)) as im:
+        assert im.format == "PNG"
+    # 画了刻度线，体积必然变大（内容不同就不可能是同一张）
+    assert gridded.content != plain.content
+
+
 def test_crop_token_flows_into_question(client, uploaded):
     """裁出来的 token 能直接入库，且原题截图能取回（导出要用）。"""
     crop = client.post(f"/api/images/{uploaded['id']}/crop", json={"bbox": [90, 140, 700, 120]}).json()["crops"][0]
