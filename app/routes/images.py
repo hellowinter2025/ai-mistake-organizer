@@ -240,6 +240,58 @@ async def reanalyse(image_id: str, payload: dict[str, Any] | None = None) -> dic
     return {"id": image_id, "url": common.image_url(image_id), "width": img.width, "height": img.height, **analysis}
 
 
+@router.post("/images/{image_id}/bands")
+async def horizontal_bands(image_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """水平空白带的位置，用来定 ``--span`` 的边界（**不调用任何模型**）。
+
+    题与题之间必有空白行。找「空白带」比找「内容块」稳：自动切题会把上一题的
+    选项行并进下一题，而空白带是绝对无歧义的——边界落在空白里，就永远不会
+    切掉半行字。墨迹用 ``imaging.ink_mask``（自适应阈值），阴影、纸纹、暗角
+    都不会被误判成墨迹，这是裸灰度阈值做不到的。
+    """
+    try:
+        img = await run_in_threadpool(common.load_image, image_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="图片不存在") from exc
+
+    body = payload or {}
+    min_h = max(1, int(body.get("min_height") or 10))
+    density = float(body.get("density") or 0.004)
+
+    def measure() -> dict[str, Any]:
+        import numpy as np
+
+        arr = np.asarray(img.convert("L"))
+        ink = imaging.ink_mask(arr) > 0
+        rows = ink.sum(axis=1)
+        empty = rows <= max(1, int(ink.shape[1] * density))
+        height = ink.shape[0]
+
+        bands: list[dict[str, Any]] = []
+        start = None
+        for y in range(height + 1):
+            is_empty = bool(empty[y]) if y < height else False
+            if is_empty and start is None:
+                start = y
+            elif not is_empty and start is not None:
+                if y - start >= min_h:
+                    bands.append(
+                        {
+                            "from": start,
+                            "to": y,
+                            "px": y - start,
+                            "ratio": [round(start / height, 4), round(y / height, 4)],
+                        }
+                    )
+                start = None
+        return {"width": img.width, "height": height, "bands": bands}
+
+    res = await run_in_threadpool(measure)
+    res["min_height"] = min_h
+    res["density"] = density
+    return res
+
+
 @router.post("/images/{image_id}/preview")
 async def preview_boxes(image_id: str, payload: dict[str, Any] | None = None) -> Response:
     """把裁剪框画在整图上（PNG），用于核对选区是否框对了题。

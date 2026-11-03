@@ -43,6 +43,8 @@ UPLOAD_BATCH = 8  # 服务端单次上限 MAX_IMAGES_PER_UPLOAD，留点余量
 SUBJECTS = ("数学", "物理", "化学", "生物", "语文", "英语", "历史", "地理", "政治")
 QUESTION_TYPES = ("选择题（单选）", "选择题（多选）", "填空题", "解答题", "证明题", "其他")
 CHOICE_TYPES = {"选择题（单选）", "选择题（多选）"}
+# 早期数据里题型只写「选择题」，判断不了单/多选，校验时放过、只提醒规范化
+LEGACY_TYPES = {"选择题"}
 METHOD_SUBJECTS = {"数学", "物理"}
 TEXT_FIELDS = ("stem", "answer", "error_reason", "solution_fix", "solution_alt", "notes")
 LIST_FIELDS = ("knowledge_points", "tags")
@@ -151,6 +153,9 @@ class Api:
 
     def post(self, path: str, body: Any = None, **kwargs: Any) -> Any:
         return self._check(self.client.post(path, json=body, **kwargs))
+
+    def patch(self, path: str, body: Any) -> Any:
+        return self._check(self.client.patch(path, json=body))
 
     def upload(self, chunk: list[Path]) -> Any:
         files = [
@@ -319,6 +324,32 @@ def cmd_analyze(api: Api, args: argparse.Namespace) -> None:
     print("\n用 mm.py crop <id> --index 1,3-4 直接按编号裁；编号不准就用 --span。")
 
 
+def cmd_bands(api: Api, args: argparse.Namespace) -> None:
+    """输出水平空白的精确位置，用来定 `--span` 的边界。
+
+    试卷上的题与题之间必有空白行。自动切题给的是「内容块」，粒度要么太粗
+    （整页两大块）、要么把选项行并到一起；而**空白带**是稳定且不歧义的：
+    挑一条落在两题之间的空白带当边界，永远不会切掉半行字。
+
+    墨迹由服务端用自适应阈值提取，阴影/纸纹/暗角不会被误判（脚本自己用
+    裸灰度阈值试过，整张图会被判成一片墨迹，一条空白带都找不到）。
+    """
+    res = api.post(
+        f"/api/images/{args.image_id}/bands",
+        {"min_height": args.min_height, "density": args.density},
+    )
+    bands = res.get("bands") or []
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
+    print(f"图高 {res.get('height')}px，找到 {len(bands)} 条 ≥{args.min_height}px 的空白带：")
+    for b in bands:
+        a, z = b["ratio"]
+        print(f"  {a:.3f} ~ {z:.3f}   (y={b['from']}..{b['to']}，高 {b['px']}px)")
+    print("\n把落在两题之间的那条空白带当边界：上一题的 --span 结束值 ≈ 它的起点，")
+    print("下一题的起始值 ≈ 它的终点（也可以让两题都往里收一点，留白总是安全的）。")
+
+
 def cmd_preview(api: Api, args: argparse.Namespace) -> None:
     boxes = resolve_boxes(api, args.image_id, args)
     body: dict[str, Any] = {"boxes": boxes} if boxes else {}
@@ -437,7 +468,10 @@ def validate(item: dict[str, Any]) -> tuple[list[str], list[str]]:
         errors.append(f"subject={subject!r} 不在 {'/'.join(SUBJECTS)} 里")
 
     qtype = str(item.get("question_type") or "").strip()
-    if qtype and qtype not in QUESTION_TYPES:
+    if qtype in LEGACY_TYPES:
+        # 旧数据里只写了「选择题」，没法从字符串判断单/多选，放过但提醒补全
+        warns.append("question_type=选择题 是旧写法，建议改成 选择题（单选）/选择题（多选）")
+    elif qtype and qtype not in QUESTION_TYPES:
         errors.append(f"question_type={qtype!r} 不在 {'/'.join(QUESTION_TYPES)} 里")
 
     for key in TEXT_FIELDS:
@@ -594,16 +628,62 @@ def cmd_add(api: Api, args: argparse.Namespace) -> None:
         print("在页面里 Ctrl+F5 刷新即可看到（编号会印在卷面上，方便核对）。")
 
 
-def cmd_get(api: Api, args: argparse.Namespace) -> None:
-    key = args.key.strip()
+def resolve_question(api: Api, key: str) -> dict[str, Any]:
+    """按 6 位编号或 uid 取一道题。"""
+    key = key.strip()
     if re.fullmatch(r"[2-9A-HJKMNP-Z]{6}", key):  # 与 db.unique_code 的字符集一致
         res = api.get("/api/questions", keyword=key, limit=20)
         hit = next((q for q in res.get("items") or [] if q.get("code") == key), None)
         if not hit:
             sys.exit(f"没找到编号 {key}")
-        q = hit
-    else:
-        q = api.get(f"/api/questions/{key}").get("question") or {}
+        return hit
+    q = api.get(f"/api/questions/{key}").get("question")
+    if not q:
+        sys.exit(f"没找到题目 {key}")
+    return q
+
+
+def cmd_update(api: Api, args: argparse.Namespace) -> None:
+    """改一道已有题目：只提交想改的字段，其余原样保留。
+
+    为什么需要它：界面里逐题点开改太慢，而「AI 当初解析错了答案」这种事
+    常常是批量的。传入的字段先过一遍同一套校验，再 PATCH。
+    """
+    q = resolve_question(api, args.key)
+    raw_text = sys.stdin.read() if args.json_file == "-" else Path(args.json_file).read_text(encoding="utf-8")
+    try:
+        patch = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        sys.exit(f"JSON 解析失败：{exc}")
+    if not isinstance(patch, dict):
+        sys.exit("patch 必须是一个 JSON 对象（只写要改的字段）")
+
+    merged = {k: q.get(k) for k in FIELDS if q.get(k) is not None}
+    merged.update({k: v for k, v in patch.items() if k in FIELDS or k == "figure_box"})
+    for key in LIST_FIELDS:
+        if key in patch:
+            merged[key] = split_list(patch[key])
+
+    if args.verify:
+        errors, warns = validate(merged)
+        for msg in warns:
+            print(f"  提醒：{msg}")
+        if errors:
+            for msg in errors:
+                print(f"  错误：{msg}")
+            sys.exit("校验未通过，未写入（去掉 --verify 可强制写入）")
+
+    body = {k: v for k, v in patch.items() if k in FIELDS or k == "figure_box"}
+    if args.dry_run:
+        print(json.dumps({"code": q.get("code"), "would_patch": body}, ensure_ascii=False, indent=2))
+        return
+    res = api.patch(f"/api/questions/{q['uid']}", body)
+    now = res.get("question") or {}
+    print(f"已更新 #{now.get('code')}：{now.get('subject')} / {now.get('question_type')} / 答案 {now.get('answer')}")
+
+
+def cmd_get(api: Api, args: argparse.Namespace) -> None:
+    q = resolve_question(api, args.key)
     if args.json:
         print(json.dumps(q, ensure_ascii=False, indent=2))
         return
@@ -662,6 +742,12 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("image_id")
     an.set_defaults(func=cmd_analyze)
 
+    bd = sub.add_parser("bands", parents=[common], help="列出水平空白带位置（定 --span 边界用）")
+    bd.add_argument("image_id")
+    bd.add_argument("--min-height", type=int, default=10, help="只报这么高的空白带（像素）")
+    bd.add_argument("--density", type=float, default=0.004, help="一行墨迹占比低于它算空行")
+    bd.set_defaults(func=cmd_bands)
+
     def add_region_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--span", action="append", metavar="Y1:Y2", help="整宽纵向区间，0~1，可重复")
         parser.add_argument("--x", action="append", metavar="X1:X2", help="横向区间，0~1，可重复（配合 --span）")
@@ -690,6 +776,13 @@ def build_parser() -> argparse.ArgumentParser:
     gt = sub.add_parser("get", parents=[common], help="按 uid 或 6 位编号回读")
     gt.add_argument("key")
     gt.set_defaults(func=cmd_get)
+
+    ud = sub.add_parser("update", parents=[common], help="改一道已有题目（只写要改的字段）")
+    ud.add_argument("key", help="6 位编号或 uid")
+    ud.add_argument("json_file", help="patch 的 JSON 文件，或 - 表示 stdin")
+    ud.add_argument("--verify", action="store_true", help="写入前跑一遍字段校验")
+    ud.add_argument("--dry-run", action="store_true", help="只看会发什么，不写")
+    ud.set_defaults(func=cmd_update)
 
     se = sub.add_parser("search", parents=[common], help="按关键词检索题库")
     se.add_argument("text")

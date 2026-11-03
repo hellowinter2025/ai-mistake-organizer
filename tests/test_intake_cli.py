@@ -168,3 +168,10 @@ def test_combine_spans_builds_grid(mm):
 def test_combine_spans_without_x_spans_full_width(mm):
     boxes = mm.combine_spans([[0.0, 0.2, 1.0, 0.3]], [])
     assert boxes == [[0.0, 0.2, 1.0, 0.3]]
+
+
+def test_legacy_choice_type_only_warns(mm):
+    """早期数据里题型只写「选择题」，不能直接判成非法（多选单选全靠猜）。"""
+    errors, warns = mm.validate(_item(question_type="选择题", answer="B"))
+    assert not any("question_type" in e for e in errors)
+    assert any("旧写法" in w for w in warns)
