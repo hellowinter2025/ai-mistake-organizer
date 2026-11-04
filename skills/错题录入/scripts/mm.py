@@ -1000,15 +1000,30 @@ def audit_question(q: dict[str, Any]) -> list[str]:
         if fix.startswith("方法："):
             issues.append("化学不该用「方法：/触发点：」格式")
     elif subject == "英语":
-        blanks = stem.count("_____")
-        if blanks > 4:
-            issues.append(f"挖了 {blanks} 个空，疑似整段照抄（只该录错的那几空）")
+        # 按「条」统计，不能按整段统计：错题本要求一条一句（(1)(2)…），
+        # 每句一两个空是正常的；只有**单条**里塞进三四个空，才是把整段照抄了。
+        lines = [ln for ln in stem.split("\n") if ln.strip()]
+        per_item = max((ln.count("_____") for ln in lines), default=0)
+        if per_item > 3:
+            issues.append(f"单条里挖了 {per_item} 个空，疑似整段照抄（只该录错的那几空）")
+        # 一整篇语法填空通常十空上下，错三个就出三条；条数到了七条，
+        # 说明基本把整篇抄进来了，等于又做了一遍练习。
+        elif len(lines) > 6:
+            issues.append(f"录了 {len(lines)} 条，疑似整段照抄（只该录学生答错的那几空）")
         if not fix:
             issues.append("没有句子翻译")
     if q.get("needs_figure") and not q.get("figure_box"):
         issues.append("贴了截图但没给 figure_box（导出会把题干文字一起印上去）")
-    if "\n" in answer:
-        issues.append("答案里有换行，确认与题干序号对得上")
+    # 答案条数要和题干条数对上。原先只要答案里有换行就报警，可是错题本本来就是
+    # 「(1)(2)(3) 多条」，答案必然多行 —— 那是误报；真正该查的是**条数不相等**。
+    # 只对英语查：数学/物理解答题的 (1)(2) 是两个小问，答案本来就常写成
+    # 一整段（先写(1)再写(2)），条数不相等并不代表出错。
+    n_stem = len(re.findall(r"(?m)^\s*\((\d+)\)", stem)) or 1
+    n_ans = len(re.findall(r"(?m)^\s*\((\d+)\)", answer)) if subject == "英语" else n_stem
+    if n_ans and n_ans != n_stem:
+        issues.append(f"答案 {n_ans} 条，题干 {n_stem} 条，序号对不上")
+    elif not n_ans and "\n" in answer and n_stem > 1:
+        issues.append(f"题干 {n_stem} 条，答案没按 (1)(2) 分条列出")
     return issues
 
 

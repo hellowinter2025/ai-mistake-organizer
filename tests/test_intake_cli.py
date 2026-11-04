@@ -328,6 +328,27 @@ def test_audit_english_flags_whole_passage(mm):
     assert any("翻译" in i for i in issues)
 
 
+def test_audit_english_accepts_per_sentence_items(mm):
+    """错题本本来就是「一条一句」：五条、每条一个空是正常的，不能按整段统计说照抄。"""
+    stem = "\n".join(f"({i}) They _____ here yesterday." for i in range(1, 6))
+    answer = "\n".join(f"({i}) were" for i in range(1, 6))
+    issues = mm.audit_question(
+        _q(subject="英语", stem=stem, answer=answer, solution_fix="(1) 昨天他们在这里。")
+    )
+    assert not any("整段" in i for i in issues)
+    assert not any("序号" in i for i in issues)
+
+
+def test_audit_english_flags_answer_count_mismatch(mm):
+    """题干五条、答案只给三条，序号必然错位，要报出来。"""
+    stem = "\n".join(f"({i}) They _____ here yesterday." for i in range(1, 6))
+    answer = "\n".join(f"({i}) were" for i in range(1, 4))
+    issues = mm.audit_question(
+        _q(subject="英语", stem=stem, answer=answer, solution_fix="(1) 翻译")
+    )
+    assert any("条" in i and "对不上" in i for i in issues)
+
+
 def test_audit_flags_figure_without_box(mm):
     issues = mm.audit_question(_q(needs_figure=1, figure_box=None))
     assert any("figure_box" in i for i in issues)
