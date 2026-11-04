@@ -122,20 +122,20 @@ def test_english_json_prompt_asks_for_blanked_sentences_and_grammar():
     # 标小序号且对应
     assert "(1)(2)(3)" in text
     assert "严格一一对应" in text
-    # 禁止长篇解析与整段转录
-    assert "不要长篇解析" in text
+    # 禁止整段转录（解析/翻译现在是要的）
+    assert "不要转录整段原文" in text
     assert "不要把这段话抄一遍" in text
-    # answer 要有内容
-    assert "solution_fix、solution_alt 一律留空字符串" in text
+    # solution_fix 现在写句子翻译，只有 solution_alt 留空
+    assert "solution_fix 写句子翻译" in text
     assert "answer 要填正确答案" in text
 
 
 def test_english_schema_is_three_column():
     hint = prompts.schema_hint("英语")
-    assert '"question_text"' in hint and "挖空" in hint
+    assert '"question_text"' in hint and "只抄学生答错" in hint
     assert '"answer"' in hint and "正确答案" in hint
     assert '"error_analysis"' in hint and "关键语法点" in hint
-    assert '"solution_fix": ""' in hint
+    assert "中文翻译" in hint
     # 英语不带化学结构式/流程图字段
     assert "smiles" not in hint and "flow" not in hint
 
@@ -311,3 +311,41 @@ def test_solution_fix_description_mentions_method():
     assert "方法：<名称>" in prompts.schema_hint("数学")
     assert "方法：<名称>" in prompts.schema_hint("物理")
     assert "方法：<名称>" not in prompts.schema_hint("化学")
+
+
+# ---------- 化学：答案必须写到能自学 ----------
+
+def test_chemistry_requires_per_option_analysis_and_equations():
+    """只给一个字母的化学答案没用：要逐项分析 + 配平方程式 + 知识点。"""
+    for json_mode in (True, False):
+        text = prompts.system_prompt(json_mode, "化学")
+        assert "逐项分析" in text
+        assert "方程式" in text and "配平" in text
+        assert "易混点" in text
+    assert "逐项分析 A→D" in prompts.schema_hint("化学")
+
+
+def test_chemistry_does_not_use_method_lines():
+    """「方法：/触发点：」是数学物理的格式，化学别照抄。"""
+    text = prompts.system_prompt(True, "化学")
+    assert "不要**套用数学/物理" in text
+    assert "触发点：" not in text
+
+
+# ---------- 英语：只录错题，且要有句子翻译 ----------
+
+def test_english_records_only_wrong_blanks():
+    """语法填空十空里错三空就只出三条，答对的空要填回去。"""
+    for json_mode in (True, False):
+        text = prompts.system_prompt(json_mode, "英语")
+        assert "只录错题" in text
+        assert "只保留学生答错的那几个空" in text
+    assert "只抄学生答错" in prompts.schema_hint("英语")
+
+
+def test_english_requires_sentence_translation():
+    text = prompts.system_prompt(True, "英语")
+    assert "中文翻译" in text
+    assert "不要逐句翻译" not in text          # 以前明令禁止，现在反过来要求
+    assert "中文翻译" in prompts.schema_hint("英语")
+    assert "solution_fix、solution_alt 一律留空" not in text

@@ -268,3 +268,66 @@ def test_render_report_passes_normal_image(mm):
 def test_render_report_flags_missing_labels(mm):
     warns, _ = mm.render_report(_png(True), '<svg><path d="M0 0"/></svg>')
     assert any("标注" in w for w in warns)
+
+
+# ---------- 体检：按学科口径挑毛病 ----------
+
+def _q(**over):
+    base = {
+        "subject": "数学",
+        "stem": "已知函数 $f(x)=x^2-4x+3$，求最小值。",
+        "answer": "-1",
+        "knowledge_points": ["二次函数"],
+        "solution_fix": "方法：配方法\n触发点：闭区间求最值\n过程：……",
+        "solution_alt": "",
+        "needs_figure": 0,
+    }
+    base.update(over)
+    return base
+
+
+def test_audit_math_accepts_method_lines(mm):
+    assert mm.audit_question(_q()) == []
+
+
+def test_audit_math_flags_missing_method_line(mm):
+    issues = mm.audit_question(_q(solution_fix="配方得 $f(x)=(x-2)^2-1$，故最小值为 -1。"))
+    assert any("方法" in i for i in issues)
+    assert any("触发点" in i for i in issues)
+
+
+def test_audit_chem_flags_letter_only_answer(mm):
+    """化学只写一个字母等于没写解析。"""
+    issues = mm.audit_question(
+        _q(subject="化学", answer="B", solution_fix="", knowledge_points=["官能团"])
+    )
+    assert any("解析为空" in i for i in issues)
+
+
+def test_audit_chem_flags_missing_equations(mm):
+    issues = mm.audit_question(
+        _q(subject="化学", answer="B",
+           solution_fix="A 项正确。B 项错误，因为醇羟基不与氢氧化钠反应。")
+    )
+    assert any("化学式" in i or "方程式" in i for i in issues)
+
+
+def test_audit_chem_flags_math_style_format(mm):
+    issues = mm.audit_question(
+        _q(subject="化学", answer="B",
+           solution_fix="方法：逐项判断\nA 正确……$\\ce{NaOH}$ 反应")
+    )
+    assert any("不该用" in i for i in issues)
+
+
+def test_audit_english_flags_whole_passage(mm):
+    """十空全抄进来的是练习题，不是错题本。"""
+    stem = "\n".join(f"({i}) They _____ here." for i in range(1, 11))
+    issues = mm.audit_question(_q(subject="英语", stem=stem, answer="(1) are", solution_fix=""))
+    assert any("整段" in i for i in issues)
+    assert any("翻译" in i for i in issues)
+
+
+def test_audit_flags_figure_without_box(mm):
+    issues = mm.audit_question(_q(needs_figure=1, figure_box=None))
+    assert any("figure_box" in i for i in issues)

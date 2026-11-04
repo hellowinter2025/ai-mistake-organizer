@@ -945,6 +945,106 @@ def cmd_search(api: Api, args: argparse.Namespace) -> None:
         print(f"  #{q.get('code')}  {q.get('subject')}  {(q.get('stem') or '')[:40]}")
 
 
+def fetch_all(api: Api, subject: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    """把题库整页拉下来（接口单页上限 200，够用；不够就翻页）。"""
+    out: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        res = api.get("/api/questions", limit=limit, offset=offset)
+        items = res.get("items") or []
+        out.extend(items)
+        total = int(res.get("total") or 0)
+        offset += len(items)
+        if not items or offset >= total:
+            break
+    if subject:
+        out = [q for q in out if q.get("subject") == subject]
+    return out
+
+
+def audit_question(q: dict[str, Any]) -> list[str]:
+    """按各学科口径挑毛病——只报「明显不合格」，判断不了的不报。
+
+    这里对应 SKILL.md 第 2 节的字段口径：数学要方法行、化学要逐项分析+方程式、
+    英语要有句子翻译、贴图的要框出图形。审阅时先跑它，再人工看被点名的题。
+    """
+    issues: list[str] = []
+    subject = str(q.get("subject") or "")
+    stem = str(q.get("stem") or "")
+    fix = str(q.get("solution_fix") or "")
+    alt = str(q.get("solution_alt") or "")
+    answer = str(q.get("answer") or "").strip()
+
+    if not answer:
+        issues.append("答案为空")
+    if not (q.get("knowledge_points") or []):
+        issues.append("没有知识点")
+    if len(stem) < 8:
+        issues.append("题干过短")
+
+    if subject in {"数学", "物理"}:
+        if not fix and not alt:
+            issues.append("解析与另解都是空的")
+        elif fix and not fix.startswith("方法："):
+            issues.append("解析没有「方法：」开头")
+        if fix and "触发点：" not in fix:
+            issues.append("解析缺「触发点：」")
+    elif subject == "化学":
+        if not fix:
+            issues.append("解析为空（化学必须逐项分析）")
+        else:
+            if "A" not in fix or "B" not in fix:
+                issues.append("解析没有逐项分析 A/B/C/D")
+            if "\\ce{" not in fix and "化学方程式" not in fix:
+                issues.append("解析里没有任何化学式（\\ce{}）")
+        if fix.startswith("方法："):
+            issues.append("化学不该用「方法：/触发点：」格式")
+    elif subject == "英语":
+        blanks = stem.count("_____")
+        if blanks > 4:
+            issues.append(f"挖了 {blanks} 个空，疑似整段照抄（只该录错的那几空）")
+        if not fix:
+            issues.append("没有句子翻译")
+    if q.get("needs_figure") and not q.get("figure_box"):
+        issues.append("贴了截图但没给 figure_box（导出会把题干文字一起印上去）")
+    if "\n" in answer:
+        issues.append("答案里有换行，确认与题干序号对得上")
+    return issues
+
+
+def cmd_audit(api: Api, args: argparse.Namespace) -> None:
+    """全库体检：列出每道题不符合口径的地方，输出可直接当工作清单用。"""
+    items = fetch_all(api, args.subject)
+    rows: list[dict[str, Any]] = []
+    for q in items:
+        issues = audit_question(q)
+        if args.all or issues:
+            rows.append(
+                {
+                    "code": q.get("code"),
+                    "subject": q.get("subject"),
+                    "type": q.get("question_type"),
+                    "stem": (str(q.get("stem") or "")[:28]).replace("\n", " "),
+                    "issues": issues,
+                }
+            )
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+    if not rows:
+        print(f"检查 {len(items)} 道，全部符合口径")
+        return
+    print(f"检查 {len(items)} 道，{len(rows)} 道待处理：")
+    for r in rows:
+        print(f"\n#{r['code']}  {r['subject']} / {r['type']}  {r['stem']}")
+        for issue in r["issues"]:
+            print(f"    · {issue}")
+    stat: dict[str, int] = {}
+    for r in rows:
+        stat[r["subject"]] = stat.get(r["subject"], 0) + 1
+    print("\n按学科：" + "、".join(f"{k} {v}" for k, v in sorted(stat.items())))
+
+
 # ---------------------------------------------------------------- 入口
 
 
@@ -1040,6 +1140,11 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("text")
     se.add_argument("--limit", type=int, default=10)
     se.set_defaults(func=cmd_search)
+
+    au = sub.add_parser("audit", parents=[common], help="全库体检：列出不符合口径的题")
+    au.add_argument("--subject", help="只看某一科")
+    au.add_argument("--all", action="store_true", help="连合格的也列出来")
+    au.set_defaults(func=cmd_audit)
 
     return p
 
