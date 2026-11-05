@@ -38,6 +38,10 @@ async function boot() {
   bindGlobal();
   refreshStats();
   resetMathStats();
+
+  // 刷新后停在原来那一页（#bank / #paper），免得每次都要重新点
+  const initial = location.hash.replace('#', '');
+  if (['recognize', 'bank', 'paper'].includes(initial)) switchView(initial, { remember: false });
 }
 
 function bindTabs() {
@@ -46,9 +50,10 @@ function bindTabs() {
   }
 }
 
-export function switchView(name) {
+export function switchView(name, { remember = true } = {}) {
   for (const tab of $$('.tab')) tab.classList.toggle('active', tab.dataset.view === name);
   for (const view of $$('.view')) view.classList.toggle('active', view.id === `view-${name}`);
+  if (remember) history.replaceState(null, '', `#${name}`);
   if (name === 'bank') loadBank();
   if (name === 'paper') refreshPapers();
   if (name === 'recognize') window.dispatchEvent(new Event('resize'));

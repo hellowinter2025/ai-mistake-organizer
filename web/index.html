@@ -139,32 +139,53 @@
   <section class="view" id="view-bank">
     <div class="bank-toolbar">
       <div class="search-box">
+        <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.4 10.4 14 14"/></svg>
         <input type="search" id="bankSearch" placeholder="搜索题干、答案、错因、知识点…">
       </div>
       <select id="bankSubject" class="mini-select" title="按学科筛选">
         <option value="">全部学科</option>
       </select>
       <label class="switch"><input type="checkbox" id="bankStarred"> 只看收藏</label>
-      <span class="muted" id="bankTotal">共 0 题</span>
+      <span class="bank-total" id="bankTotal">共 0 题</span>
       <div class="spacer"></div>
-      <select id="bankDate" class="mini-select" title="按提交日期全选">
-        <option value="">按日期全选…</option>
-      </select>
-      <button class="btn ghost" id="btnSelectDate" disabled>全选该日期</button>
+      <div class="bank-viewopts">
+        <select id="bankGroup" class="mini-select" title="分组方式">
+          <option value="">不分组</option>
+          <option value="date">按日期</option>
+          <option value="subject">按学科</option>
+          <option value="type">按题型</option>
+        </select>
+        <div class="seg" id="bankLayout" role="group" aria-label="查看样式">
+          <button type="button" data-layout="card" class="on" title="卡片视图">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></svg>
+          </button>
+          <button type="button" data-layout="list" title="列表视图">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3.1" width="12" height="1.9" rx=".95"/><rect x="2" y="7.05" width="12" height="1.9" rx=".95"/><rect x="2" y="11" width="12" height="1.9" rx=".95"/></svg>
+          </button>
+          <button type="button" data-layout="read" title="全展开：显示答案与解析">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2"/><rect x="4.4" y="5" width="7.2" height="1.3" rx=".65" fill="#fff"/><rect x="4.4" y="7.7" width="7.2" height="1.3" rx=".65" fill="#fff"/><rect x="4.4" y="10.4" width="4.4" height="1.3" rx=".65" fill="#fff"/></svg>
+          </button>
+        </div>
+      </div>
       <button class="btn ghost" id="btnBankRefresh">刷新</button>
     </div>
-    <div class="bank-grid" id="bankGrid"></div>
+
+    <div class="bank-scroll" id="bankScroll">
+      <div class="bank-groups" id="bankGroups"></div>
+      <div class="empty-state hidden" id="bankEmpty">
+        <div class="empty-art">📚</div>
+        <p>题库还是空的</p>
+        <span>去「识别整理」上传第一张试卷照片吧</span>
+      </div>
+    </div>
+
     <!-- 框选/多选后浮出的批量操作条 -->
     <div class="bank-selbar hidden" id="bankSelBar">
       <span id="bankSelCount">已选 0 题</span>
       <button class="btn primary" id="btnSelCart">加入组卷</button>
       <button class="btn ghost" id="btnSelAll">全选当前结果</button>
       <button class="btn ghost" id="btnSelClear">清空选择</button>
-    </div>
-    <div class="empty-state hidden" id="bankEmpty">
-      <div class="empty-art">📚</div>
-      <p>题库还是空的</p>
-      <span>去「识别整理」上传第一张试卷照片吧</span>
+      <span class="selhint">拖动可框选一片 · Esc 取消</span>
     </div>
   </section>
 
