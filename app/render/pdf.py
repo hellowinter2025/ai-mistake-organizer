@@ -165,10 +165,25 @@ body { font-size: 10pt; line-height: 1.6; }
   margin: 0 0 2.6mm;
   border-bottom: 0.5pt dashed #999;
 }
+/* 第一题上面也画一条：沿它剪，别把上面那截白边带进本子 */
+.cut-item:first-child {
+  border-top: 0.5pt dashed #999;
+  padding-top: 2.6mm;
+}
 .cut-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
 .cut-item .q-line { display: flex; align-items: flex-start; }
 .cut-item .q-no { flex: 0 0 auto; font-weight: 700; margin-right: 1.4mm; min-width: 5mm; }
 .cut-item .q-body { flex: 1 1 auto; text-align: justify; }
+/* 右上角小字：这张纸条贴上本子要占几行（0.9cm 一行，向上取整），
+   数字由页面脚本按真实渲染高度算出来，见 _LINE_MEASURE_JS */
+.cut-lines:empty { display: none; }
+.cut-lines:empty { display: none; }
+.cut-lines {
+  flex: 0 0 auto; align-self: flex-start; margin-left: 3mm; padding-left: 2mm;
+  border-left: 0.4pt dotted #ddd;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 7pt; line-height: 1.4; color: #666; white-space: nowrap;
+}
 .cut-error { margin: 1.2mm 0 0 6.4mm; font-size: 9.5pt; }
 .cut-error .lbl { font-size: 8.5pt; margin: 0; }
 .cut-item .figure { margin: 1.6mm 0 0.6mm; }
@@ -182,6 +197,35 @@ body { font-size: 10pt; line-height: 1.6; }
   body { background: #fff; width: 158mm; margin: 6mm auto; padding: 0;
          box-shadow: 0 1px 6px rgba(0,0,0,.18); }
 }
+"""
+
+# 裁切粘贴版要在每题右上角标「预留 N 行」：纸条多高，本子上就得空出几行。
+# 高度只有排完版才知道，所以在页面里量一遍再写回去（打印脚本会等这个标记）。
+# 9mm 是错题本上的一行；CSS px 换算成毫米按 96dpi。
+_LINE_MEASURE_JS = """
+<script>
+(function () {
+  var LINE_MM = 9;            // 一行 0.9cm
+  var PX_MM = 25.4 / 96;
+  function fill(final) {
+    document.querySelectorAll('.cut-item').forEach(function (item) {
+      var label = item.querySelector('.cut-lines');
+      if (!label) return;
+      // 只量 item 自身（含 padding、不含题间 margin）——那才是剪下来纸条的高度
+      var mm = item.getBoundingClientRect().height * PX_MM;
+      label.textContent = '预留 ' + Math.max(1, Math.ceil(mm / LINE_MM)) + ' 行';
+    });
+    if (final) document.documentElement.dataset.measured = '1';
+  }
+  // 先填一次：万一走的是命令行 --print-to-pdf 回退路径，也已经有数字
+  fill(false);
+  try {
+    document.fonts.ready.then(function () { fill(true); });
+  } catch (e) {
+    document.documentElement.dataset.measured = '1';
+  }
+})();
+</script>
 """
 
 
@@ -311,8 +355,9 @@ def _build_cutout_html(
 ) -> str:
     """裁切粘贴版：只有题干和错因，题与题之间留虚线剪切线。
 
-    这个版式不做页眉页脚、不排姓名日期，页宽 178mm（比 16 开窄 7mm），
-    打印出来沿线剪下就能贴进 16 开笔记本，不用再缩放。
+    版心收在 A4 中间 158mm 一列（四周留 24~26mm），沿虚线剪下来就能贴进
+    16 开笔记本。每题右上角标「预留 N 行」——纸条贴上去要占本子几行，
+    按 0.9cm 一行向上取整；第一题上面也有一条虚线，剪的时候一并对齐。
     """
     texts: list[str] = []
     jobs: list[tuple[str, int]] = []
@@ -344,7 +389,8 @@ def _build_cutout_html(
             bucket.get(("stem", i), ""),
             # 裁切稿篇幅紧，图压到 40mm；整块截图当图用时别把版面撑爆
             _figure_html(q, {**opts, "include_source_image": want_figure}, max_height_mm=40),
-            "</span></div>",
+            # 行数标签留空，由页面脚本量完高度再填（见 _LINE_MEASURE_JS）
+            '</span><span class="cut-lines"></span></div>',
         ]
         err = bucket.get(("error", i), "")
         if err:
@@ -354,6 +400,7 @@ def _build_cutout_html(
             )
         block.append("</div>")
         parts.append("".join(block))
+    parts.append(_LINE_MEASURE_JS)
     parts.append("</body></html>")
     return "".join(parts)
 

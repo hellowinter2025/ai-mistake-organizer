@@ -147,6 +147,22 @@ function cdp(ws) {
       expression: 'document.fonts.ready.then(()=>true)',
       awaitPromise: true,
     });
+    // 裁切粘贴版里每题右上角要标「预留 N 行」，数字是页面脚本按真实高度算的。
+    // 不等到算完就打印，PDF 上会是一片空白。
+    const hasCutout = await send('Runtime.evaluate', {
+      expression: "!!document.querySelector('.cut-lines')",
+      returnByValue: true,
+    });
+    if (hasCutout.result && hasCutout.result.value) {
+      for (let i = 0; i < 40; i += 1) {
+        const done = await send('Runtime.evaluate', {
+          expression: "document.documentElement.dataset.measured === '1'",
+          returnByValue: true,
+        });
+        if (done.result && done.result.value) break;
+        await sleep(80);
+      }
+    }
     await sleep(320);
     const header = headerFile && fs.existsSync(headerFile) ? fs.readFileSync(headerFile, 'utf8') : '';
     const footer = footerFile && fs.existsSync(footerFile) ? fs.readFileSync(footerFile, 'utf8') : '';

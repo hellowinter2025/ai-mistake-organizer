@@ -185,6 +185,46 @@ def test_cutout_uses_dashed_cut_lines_and_no_header():
     assert html.count('class="cut-item"') == len(QUESTIONS)
 
 
+def test_cutout_marks_lines_to_reserve_and_has_top_cut_line():
+    """每题右上角标「预留 N 行」（0.9cm 一行，向上取整），第一题上面也有剪切线。
+
+    行数只能等排完版才量得出来，所以 HTML 里先留空标签，由内联脚本按实际高度填；
+    打印脚本会等 ``data-measured`` 再输出 PDF，否则 PDF 上是一片空白。
+    """
+    html = pdf.build_paper_html(_cutout_paper(), QUESTIONS)
+
+    # 每道题一个空标签，脚本负责填数字
+    assert html.count('class="cut-lines"') == len(QUESTIONS)
+    # 第一题上方也要有一条虚线：沿它剪，别把上面的白边带进本子
+    assert ".cut-item:first-child {" in html
+    assert "border-top: 0.5pt dashed" in html
+    # 测量脚本与等待标记
+    assert "LINE_MM = 9" in html
+    assert "dataset.measured" in html
+    # 标签为空时不占位
+    assert ".cut-lines:empty { display: none; }" in html
+
+
+def test_cutout_marks_lines_to_reserve_and_has_top_cut_line():
+    """每题右上角标「预留 N 行」（0.9cm 一行，向上取整），第一题上面也有剪切线。
+
+    行数只能等排完版才量得出来，所以 HTML 里先留空标签，由内联脚本按实际高度填；
+    打印脚本会等 ``data-measured`` 再输出 PDF，否则 PDF 上是一片空白。
+    """
+    html = pdf.build_paper_html(_cutout_paper(), QUESTIONS)
+
+    # 每道题一个空标签，脚本负责填数字
+    assert html.count('class="cut-lines"') == len(QUESTIONS)
+    # 第一题上方也要有一条虚线：沿它剪，别把上面的白边带进本子
+    assert ".cut-item:first-child {" in html
+    assert "border-top: 0.5pt dashed" in html
+    # 测量脚本与等待标记
+    assert "LINE_MM = 9" in html
+    assert "dataset.measured" in html
+    # 标签为空时不占位
+    assert ".cut-lines:empty { display: none; }" in html
+
+
 def test_standard_layout_still_full_paper():
     html = pdf.build_paper_html(_paper(), QUESTIONS)
     assert "doc-title" in html
